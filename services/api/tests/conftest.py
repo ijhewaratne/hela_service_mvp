@@ -41,7 +41,24 @@ def owner_engine():
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(env='test', database_url=APP_URL, redis_url=REDIS_URL)
+    return Settings(env='test', database_url=APP_URL, redis_url=REDIS_URL, s3_bucket='hela-evidence-test',
+                    clamd_host=None)
+
+
+EICAR = rb'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*'
+
+
+class FakeScanner:
+    """Deterministic stand-in for clamd: flags the EICAR test string; `available=False` simulates an outage."""
+
+    def __init__(self):
+        self.available = True
+
+    def scan(self, data):
+        from hela.evidence.scanning import ScanResult
+        if not self.available:
+            return ScanResult('unavailable', 'scanner_unreachable')
+        return ScanResult('infected', 'Eicar-Test-Signature') if EICAR in data else ScanResult('clean')
 
 
 @pytest.fixture
@@ -62,6 +79,7 @@ def reset(owner_engine, settings):
 @pytest.fixture
 def app(reset, settings):
     application = create_app(settings)
+    application.state.services.scanner = FakeScanner()
     yield application
     application.state.services.engine.dispose()
 
@@ -155,3 +173,103 @@ def region(db):
 
 def bearer(tokens):
     return {'Authorization': f"Bearer {tokens['access_token']}"}
+
+
+# --- provider trust (M02) -----------------------------------------------------------------------------
+
+PDF = b'%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n'
+PNG = b'\x89PNG\r\n\x1a\n' + b'\x00' * 64
+
+
+@pytest.fixture
+def categories(reset, db):
+    """Synthetic taxonomy from the seed command, inserted as the owner (the runtime role cannot)."""
+    import json
+
+    from hela.cli import CATEGORIES, PILOT_EVIDENCE, PROHIBITED
+    for code, name, risk, enabled, safeguards, tasks in CATEGORIES:
+        db('''INSERT INTO service_categories(code, display_name, risk_class, status) VALUES (:c, :n, :r, :s)''',
+           c=code, n=name, r=risk, s='enabled' if enabled else 'disabled')
+        db('''INSERT INTO category_policies(category_code, version, status, allowed_tasks, prohibited_tasks,
+                  min_duration_minutes, max_duration_minutes, max_radius_km, required_evidence, safeguards_required)
+              VALUES (:c, 1, 'active', CAST(:a AS jsonb), CAST(:p AS jsonb), 60, 480, 10, CAST(:e AS jsonb), :sg)''',
+           c=code, a=json.dumps(tasks), p=json.dumps(PROHIBITED), e=json.dumps(PILOT_EVIDENCE), sg=safeguards)
+
+
+def upload(client, tokens, evidence_type, data=PDF, media_type='application/pdf', **form):
+    return client.post('/v1/provider/evidence', headers=bearer(tokens),
+                       data={'evidence_type': evidence_type, **form},
+                       files={'file': ('doc', data, media_type)})
+
+
+@pytest.fixture
+def applicant(client, login):
+    """A provider who applied, uploaded the pilot evidence set and submitted. Returns (tokens, evidence ids)."""
+    def do(phone='+94771000001'):
+        tokens = login(phone=phone)
+        r = client.post('/v1/provider/apply', headers=bearer(tokens),
+                        json={'legal_name': 'Synthetic Provider', 'date_of_birth': '1990-05-17'})
+        assert r.status_code == 201, r.text
+        ids = {}
+        for etype in ('national_id', 'reference', 'reference', 'training_record'):
+            r = upload(client, tokens, etype)
+            assert r.status_code == 201, r.text
+            ids.setdefault(etype, []).append(r.json()['id'])
+        assert client.post('/v1/provider/application/submit', headers=bearer(tokens)).status_code == 200
+        return tokens, ids
+    return do
+
+
+@pytest.fixture
+def reviewer(make_admin, admin_login):
+    def do(username='review.rita'):
+        aid, clock = make_admin(username, roles=[('verification_reviewer', None)])
+        return admin_login(username, clock), clock
+    return do
+
+
+def step_up(client, tokens, clock, action):
+    r = client.post('/v1/admin/auth/step-up', headers=bearer(tokens), json={'action': action, 'totp': clock.next()})
+    assert r.status_code == 201, r.text
+
+
+@pytest.fixture
+def approved_provider(client, applicant, reviewer):
+    """Runs the full reviewer workflow for household_cleaning. Returns (provider tokens, provider id, approval id,
+    reviewer tokens, reviewer clock)."""
+    def do(phone='+94771000001'):
+        tokens, ids = applicant(phone)
+        rtok, clock = reviewer()
+        pid = client.get('/v1/provider/me', headers=bearer(tokens)).json()['provider_id']
+        for evidence_id in [i for group in ids.values() for i in group]:
+            r = client.post(f'/v1/admin/evidence/{evidence_id}/review', headers=bearer(rtok),
+                            json={'decision': 'accept', 'reason': 'Checked against original'})
+            assert r.status_code == 200, r.text
+        for decision in ('start_review', 'approve'):
+            r = client.post(f'/v1/admin/providers/{pid}/application/decision', headers=bearer(rtok),
+                            json={'decision': decision, 'reason': 'Identity and age checked',
+                                  'identity_verified': True, 'age_verification_method': 'id_document_inspected'})
+            assert r.status_code == 200, r.text
+        approval = client.post('/v1/provider/categories', headers=bearer(tokens),
+                               json={'category_code': 'household_cleaning'}).json()
+        r = client.post(f"/v1/admin/provider-approvals/{approval['id']}/decision", headers=bearer(rtok),
+                        json={'decision': 'start_review', 'reason': 'Starting category review'})
+        assert r.status_code == 200, r.text
+        step_up(client, rtok, clock, 'category.approve')
+        r = client.post(f"/v1/admin/provider-approvals/{approval['id']}/decision", headers=bearer(rtok),
+                        json={'decision': 'approve', 'reason': 'All pilot evidence accepted',
+                              'probation_min_jobs': 3})
+        assert r.status_code == 200, r.text
+        return tokens, pid, approval['id'], rtok, clock
+    return do
+
+
+@pytest.fixture
+def gaps(app):
+    from hela.core.db import tx
+    from hela.verification.eligibility import provider_category_gaps
+
+    def do(provider_id, category='household_cleaning', at=None):
+        with tx(app.state.services.engine) as con:
+            return provider_category_gaps(con, provider_id, category, at)
+    return do

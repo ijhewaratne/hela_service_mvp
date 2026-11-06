@@ -19,7 +19,8 @@ from . import sessions
 
 router = APIRouter(prefix='/v1/admin/auth', tags=['admin-auth'])
 
-StepUpAction = Literal['phone.change', 'evidence.read', 'role.grant', 'policy.change', 'category.approve']
+StepUpAction = Literal['phone.change', 'evidence.read', 'role.grant', 'policy.change', 'category.approve',
+                       'provider.reinstate']
 MFA_MAX_ATTEMPTS = 5
 
 

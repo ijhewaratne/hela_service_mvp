@@ -53,7 +53,15 @@ jobs:
           sudo apt-get install -y -q postgresql-client >/dev/null
           export PGHOST=127.0.0.1 PGPORT=55432
           bash ../../infra/docker/postgres-init/01-roles-and-databases.sh
+      - name: Start MinIO (service containers cannot pass a server command)
+        run: |
+          docker run -d --name minio -p 127.0.0.1:59000:9000 \
+            -e MINIO_ROOT_USER=hela_dev_s3 -e MINIO_ROOT_PASSWORD=hela_dev_s3_secret_only \
+            cgr.dev/chainguard/minio@sha256:aea6c163749e1caca37f907976dcf337177ddf5f558808f2aa591618fd3a6eef \
+            server /data --address :9000
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:59000/minio/health/live && break; sleep 1; done
       - run: python -m pip install -e '.[test,dev]'
+      - run: HELA_S3_BUCKET=hela-evidence-test python -m hela.cli init-storage
       - run: ruff check hela migrations tests
       - run: python -m pytest
       - name: Dependency vulnerability scan

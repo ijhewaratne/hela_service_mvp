@@ -34,5 +34,30 @@ services:
       timeout: 3s
       retries: 20
 
+  minio:
+    # minio/minio is no longer published on Docker Hub; Chainguard's build is pinned by digest
+    # (MinIO RELEASE.2026-10-23T20-06-51Z).
+    image: cgr.dev/chainguard/minio@sha256:aea6c163749e1caca37f907976dcf337177ddf5f558808f2aa591618fd3a6eef
+    command: ["server", "/data", "--address", ":9000", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${HELA_S3_ACCESS_KEY:-hela_dev_s3}
+      MINIO_ROOT_PASSWORD: ${HELA_S3_SECRET_KEY:-hela_dev_s3_secret_only}
+    ports:
+      - "127.0.0.1:59000:9000"
+      - "127.0.0.1:59001:9001"
+    volumes:
+      - miniodata:/data
+
+  clamav:
+    # No arm64 build; runs under emulation on Apple Silicon. First start downloads signatures (several minutes).
+    image: clamav/clamav:1.4.3
+    platform: linux/amd64
+    ports:
+      - "127.0.0.1:53310:3310"
+    volumes:
+      - clamdb:/var/lib/clamav
+
 volumes:
   pgdata:
+  miniodata:
+  clamdb:

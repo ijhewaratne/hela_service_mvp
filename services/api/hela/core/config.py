@@ -34,6 +34,17 @@ class Settings(BaseSettings):
     admin_mfa_token_seconds: int = 300
     admin_max_failed_logins: int = 5
 
+    # Private evidence storage (S3-compatible) and malware scanning (Q28, Q38)
+    s3_endpoint: str = 'http://127.0.0.1:59000'
+    s3_access_key: str = 'hela_dev_s3'
+    s3_secret_key: str = 'hela_dev_s3_secret_only'  # noqa: S105 - dev default, refused outside dev/test
+    s3_bucket: str = 'hela-evidence-dev'
+    clamd_host: str | None = '127.0.0.1'
+    clamd_port: int = 53310
+    max_evidence_bytes: int = 10 * 1024 * 1024
+    evidence_token_seconds: int = Field(default=60, le=60)
+    min_provider_age: int = Field(default=18, ge=18)  # proposed pilot rule, pending local approval (Q13)
+
     # Sandbox SMS inbox: only mounted when env == 'dev' and a token is configured.
     dev_inbox_token: str | None = None
 
@@ -43,6 +54,8 @@ class Settings(BaseSettings):
             if 'dev-only' in self.jwt_secret or self.field_key_b64.startswith('ZGV2LW9ubHkt') \
                     or self.lookup_key_b64.startswith('ZGV2LW9ubHkt'):
                 raise ValueError('Development secrets are not allowed outside dev/test')
+            if 'dev_s3_secret_only' in self.s3_secret_key:
+                raise ValueError('Development storage credentials are not allowed outside dev/test')
             if self.dev_inbox_token:
                 raise ValueError('The sandbox SMS inbox cannot be enabled outside dev')
         return self

@@ -7,6 +7,8 @@ import redis
 from fastapi import Request
 from sqlalchemy import Engine
 
+from ..evidence.scanning import MalwareScanner
+from ..evidence.storage import EvidenceSealer, ObjectStore
 from ..identity.sms import SmsSender
 from ..security.crypto import FieldCipher
 from .config import Settings
@@ -19,6 +21,9 @@ class Services:
     cipher: FieldCipher
     redis: redis.Redis
     sms: SmsSender
+    store: ObjectStore
+    sealer: EvidenceSealer
+    scanner: MalwareScanner
 
 
 def services(request: Request) -> Services:

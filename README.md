@@ -12,7 +12,7 @@
 | `services/api/` | R1 FastAPI modular monolith (Python 3.12, PostgreSQL/PostGIS, Redis) |
 | `services/api/migrations/` | Alembic migrations (run as `hela_owner`; the API runs as least-privilege `hela_app`) |
 | `services/workers/` | Outbox/background workers (M03) |
-| `infra/docker/` | Docker Compose dev stack, bound to 127.0.0.1 |
+| `infra/docker/` | Docker Compose dev stack (PostGIS, Redis, MinIO, ClamAV), bound to 127.0.0.1 |
 | `legacy/v0_2/` | The original SQLite prototype, frozen and still tested. Never run its demo auth in the new backend. |
 | `docs/` | Spec questions, PRD, earlier design notes |
 | `scripts/env_check.sh` | Checks Python 3.12, Docker and ports |
@@ -21,9 +21,9 @@
 
 | Milestone | Status |
 |---|---|
-| M01 Data foundation: Postgres/PostGIS, migrations, identity, authorization, audit | **Done (this commit)** |
-| M02 Provider trust: onboarding, evidence storage, approvals, expiry | Next |
-| M03 Booking engine: catalogue, quotes, requests, matching, offers, bookings, settlement, incidents | Planned |
+| M01 Data foundation: Postgres/PostGIS, migrations, identity, authorization, audit | Done |
+| M02 Provider trust: categories, onboarding, evidence storage, approvals, expiry | **Done** |
+| M03 Booking engine: addresses, quotes, requests, matching, offers, bookings, settlement, incidents | Next |
 | R2: Flutter customer/provider apps, React admin | After the R1 gate |
 
 ## Run locally (macOS)
@@ -36,7 +36,9 @@ cd services/api
 .venv/bin/pip install -e '.[test,dev]'
 .venv/bin/alembic upgrade head
 HELA_MIGRATION_DATABASE_URL=postgresql+psycopg://hela_owner:hela_owner_dev_only@127.0.0.1:55432/hela_test .venv/bin/alembic upgrade head
-.venv/bin/python -m hela.cli seed-synthetic
+.venv/bin/python -m hela.cli init-storage
+HELA_S3_BUCKET=hela-evidence-test .venv/bin/python -m hela.cli init-storage
+.venv/bin/python -m hela.cli seed-synthetic      # connects as the owner role: category policies are privileged
 .venv/bin/python -m hela.cli create-admin --username ops.alice --role super_admin --reason "Local dev bootstrap"
 HELA_ENV=dev HELA_DEV_INBOX_TOKEN=pick-a-local-token .venv/bin/uvicorn hela.asgi:app --host 127.0.0.1 --port 8000
 ```
@@ -48,6 +50,10 @@ API docs: http://127.0.0.1:8000/docs (dev/test only).
 **Development OTP codes** go to a sandbox inbox, never to logs. Read the latest one with:
 `POST /v1/dev/sms-inbox/latest` with body `{"phone": "+9477..."}` and header `X-Dev-Inbox-Token`.
 This route exists only when `HELA_ENV=dev` and a token is set. Settings refuse it in staging and production.
+
+**ClamAV** takes several minutes on first start (signature download, amd64 emulation on Apple Silicon).
+Uploads made while it is unavailable are stored encrypted as `pending` and cannot be reviewed or opened until
+`python -m hela.cli rescan-evidence` marks them clean. Run `python -m hela.cli expire-verifications` daily.
 
 **Tests** (needs the Compose stack running): `cd services/api && .venv/bin/python -m pytest`
 
@@ -67,9 +73,29 @@ This route exists only when `HELA_ENV=dev` and a token is set. Settings refuse i
 - **Notices (FR-ID-05):** versioned notices per language. Each acceptance records the version, language and processing context.
 - **Localisation (Q61):** `si`/`ta`/`en` preference, with English as the reviewed source. `si` and `ta` are marked untranslated.
 
-### Known gaps (tracked for M02/M03)
+## M02: what's implemented
+
+- **Categories (§4):** the spec's taxonomy is seeded with the three Q21 pilot categories enabled. Each category has versioned policies: allowed and prohibited tasks, durations, radius and required evidence. The database refuses edits to a policy's content, so changes need a new version. Childcare and clinical care can't be enabled, and a database constraint backs that up. Gated categories need an APPROVED policy. Enabling or disabling any category uses the same two-admin approval as regions.
+- **Applying (FR-ID-06, Q13):** a provider applies with legal name and date of birth, both encrypted. Applicants under the minimum age (18, still a proposed rule) are refused, but the age the applicant enters only screens them out early. A reviewer still confirms age against ID and records the method.
+- **Evidence uploads (Q28, Q38, SEC-07):** PDF, JPEG or PNG only, detected from file content (not the stated type), under a size limit, and PDFs with active content are rejected. Every upload is scanned by ClamAV.
+  - **Infected files** are quarantined: only the hash is kept.
+  - **If the scanner is unavailable**, the file is kept but locked from review and download until a rescan says it's clean.
+  - **Storage:** each file is encrypted with its own key before it reaches MinIO, so the storage only ever holds ciphertext.
+- **Reviewer access (Q14, AT-014):** case summaries never show identity details. Viewing a name or date of birth, or downloading a document, needs a fresh authenticator check and a stated purpose, and is recorded in an append-only access log. A download link works once, only for the admin who requested it, for at most 60 seconds, and the file is checked against its stored hash on the way out.
+- **Decisions (FR-VER-02/03/05):** there are separate state machines for the provider's application and for each category approval. Every decision needs a reason and is recorded in an append-only history, including the policy version and the evidence used.
+  - **No overrides:** an approval can't be granted while any required evidence is missing or expired (§8.1).
+  - **Validity:** an approval lasts no longer than the earliest expiry or re-review date of the evidence behind it.
+  - **Probation:** stored and visible to admins only.
+- **Eligibility (FR-VER-04, INV-03):** `provider_category_gaps()` lists a reason code for every failed check. It reads expiry dates directly, so an expired provider is never treated as eligible even if the expiry job hasn't run yet. It also checks against the current policy version, so a stricter new version applies to existing approvals immediately.
+- **Suspension (INV-11, Q39):** reviewers and incident responders can suspend a provider immediately, with no step-up, so protective action isn't slowed down. Reinstating needs a reviewer plus step-up. A hook is in place so that M03 can revoke pending offers and flag active jobs when a provider is suspended.
+- **Expiry and reminders (FR-VER-07):** the expiry job is safe to run repeatedly, and an admin list shows evidence and approvals expiring soon. Nothing is ever approved automatically.
+
+### Known gaps (tracked for M03+)
 
 - No real SMS vendor (DEC-08). Outside dev, the app refuses to pretend an SMS was sent.
 - Keys come from environment variables (`EnvKeyProvider`). A managed KMS provider is needed before staging.
 - Admin TOTP recovery is an operator procedure only, with no self-service yet.
-- Category policies, provider evidence, bookings, outbox and notifications are not built yet.
+- New policy versions are created by the operator CLI or SQL as the owner role. An admin API with two-admin approval for policy versions comes later.
+- Provider service area and availability are owned by M03.
+- Infected files found by a rescan have their encryption key destroyed. The leftover ciphertext stays in storage, unreadable, until a retention job exists (DEC-09).
+- `minio/minio` is no longer published on Docker Hub. The stack uses Chainguard's build, pinned by digest.
