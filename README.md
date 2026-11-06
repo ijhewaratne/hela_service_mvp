@@ -11,7 +11,7 @@
 |---|---|
 | `services/api/` | R1 FastAPI modular monolith (Python 3.12, PostgreSQL/PostGIS, Redis) |
 | `services/api/migrations/` | Alembic migrations (run as `hela_owner`; the API runs as least-privilege `hela_app`) |
-| `services/workers/` | Outbox/background workers (M03) |
+| `services/workers/` | How to run the background worker (`python -m hela.worker`) |
 | `infra/docker/` | Docker Compose dev stack (PostGIS, Redis, MinIO, ClamAV), bound to 127.0.0.1 |
 | `legacy/v0_2/` | The original SQLite prototype, frozen and still tested. Never run its demo auth in the new backend. |
 | `docs/` | Spec questions, PRD, earlier design notes |
@@ -22,8 +22,9 @@
 | Milestone | Status |
 |---|---|
 | M01 Data foundation: Postgres/PostGIS, migrations, identity, authorization, audit | Done |
-| M02 Provider trust: categories, onboarding, evidence storage, approvals, expiry | **Done** |
-| M03 Booking engine: addresses, quotes, requests, matching, offers, bookings, settlement, incidents | Next |
+| M02 Provider trust: categories, onboarding, evidence storage, approvals, expiry | Done |
+| M03 Booking engine: addresses, quotes, requests, matching, offers, bookings, settlement, incidents | **Done** |
+| R1 gate hardening: Postgres-level multi-worker tests, load test, security review prep | Next |
 | R2: Flutter customer/provider apps, React admin | After the R1 gate |
 
 ## Run locally (macOS)
@@ -41,6 +42,7 @@ HELA_S3_BUCKET=hela-evidence-test .venv/bin/python -m hela.cli init-storage
 .venv/bin/python -m hela.cli seed-synthetic      # connects as the owner role: category policies are privileged
 .venv/bin/python -m hela.cli create-admin --username ops.alice --role super_admin --reason "Local dev bootstrap"
 HELA_ENV=dev HELA_DEV_INBOX_TOKEN=pick-a-local-token .venv/bin/uvicorn hela.asgi:app --host 127.0.0.1 --port 8000
+HELA_ENV=dev .venv/bin/python -m hela.worker      # second terminal: dispatch, expiry, notifications
 ```
 
 `create-admin` prints a TOTP secret and `otpauth://` URI **once**. Add it to an authenticator app.
@@ -90,12 +92,58 @@ Uploads made while it is unavailable are stored encrypted as `pending` and canno
 - **Suspension (INV-11, Q39):** reviewers and incident responders can suspend a provider immediately, with no step-up, so protective action isn't slowed down. Reinstating needs a reviewer plus step-up. A hook is in place so that M03 can revoke pending offers and flag active jobs when a provider is suspended.
 - **Expiry and reminders (FR-VER-07):** the expiry job is safe to run repeatedly, and an admin list shows evidence and approvals expiring soon. Nothing is ever approved automatically.
 
-### Known gaps (tracked for M03+)
+## M03: what's implemented
+
+The whole booking flow works through the API and the worker:
+address → quote → accept terms → request (beneficiary consent if booking for someone else) → automatic matching → offer to one provider at a time → atomic acceptance → en route → arrived → PIN check-in → work done → customer confirms or disputes → both sides acknowledge the offline payment → moderated review.
+
+**Requests and pricing**
+- **Addresses (FR-LOC):** the customer has to confirm the map pin. The exact address and pin are encrypted. Matching only uses a point rounded to about 550 m. An address outside an enabled region is refused (AT-029).
+- **Quotes (Q29–Q31):** amounts are integer cents with currency `LKR`. Each quote breaks the price into parts, records the policy and price-rule versions, and is valid for 15 minutes. It's tied to that customer, address and duration, can be used once, and the customer must accept the terms version they saw. Price rules are versioned and marked UNAPPROVED.
+- **Requests (FR-REQ, Q24–Q27):** every request needs an `Idempotency-Key`. Repeating a request returns the same response, and reusing a key with a different body is refused with 409. The server checks the notice period, how far ahead the booking is, the 30-minute duration steps and the policy's minimum and maximum. Tasks must be from the allowed checklist, and prohibited tasks are refused. A request expires 60 minutes before its start time if nobody has accepted it.
+- **Beneficiaries (FR-BEN, Q19, Q20):** when booking for someone else, the beneficiary must confirm by SMS code before any dispatch. If they decline or don't respond, the request is cancelled. Staff can record consent on the beneficiary's behalf with step-up and a reason. The booker only ever sees the last 3 digits of the beneficiary's number, and the check-in PIN goes to the beneficiary.
+
+**Matching and offers**
+- **Matching (§8, Q40–Q45):** the mandatory checks run first:
+  - the M02 eligibility check,
+  - service area (the smaller of the provider's radius and the policy's),
+  - a weekly Asia/Colombo slot that covers the whole job,
+  - no blackout,
+  - no overlapping job (with a 30-minute travel buffer),
+  - the provider isn't the customer.
+
+  Only providers who pass are ranked, using the spec's proposed weights. New providers get a neutral score for their first 5 offers, and expired offers don't count against anyone. Every run is stored with the counts and reason codes behind it. If nobody qualifies, the request is honestly marked `unfulfilled`.
+- **Offers (Q41, Q42):** one offer at a time, valid for 10 minutes, up to 5 rounds. A decline or an expiry moves on to the next provider. Before accepting, the provider sees only the area name, a distance band, times, tasks and price.
+- **Acceptance (§12.3):** the request, offer and provider are locked in a fixed order, and every check is re-run. If the provider is no longer eligible, the offer is revoked and the request is redispatched; that is committed before the error is returned (AT-003, AT-010, AT-011).
+  - The database itself guarantees one live assignment per booking and refuses overlapping jobs for a provider. Two concurrent races were run 15 times each and always produced exactly one winner (AT-004, AT-005).
+  - Accepting again after a lost response returns the same booking (AT-020).
+
+**Bookings**
+- **State machine (§7.2, Q47–Q51):** each step is limited to the right actor and checked against the booking's version, and every step is recorded.
+  - **PIN check-in:** locks after 5 wrong codes. Staff can make an exception with step-up and a reason.
+  - **Cancellation:** customers can cancel before the provider arrives. Providers can only cancel for safety, which needs a reason and always opens an urgent incident. Admins can cancel with a reason.
+  - **Unconfirmed completion:** after 48 hours an alert appears for a human; bookings are never completed automatically.
+  - **Reassignment:** keeps the same booking ID. The old provider loses access straight away, and the new provider still has to accept an offer.
+- **Who sees what (INV-07, INV-08):** the customer and the provider of record can see the booking; anyone else gets 404. The provider sees the exact address and task note only while the job is active. Admin views never include the address.
+
+**Payments, incidents and reviews**
+- **Settlement (FR-PAY, Q53–Q55):** the payment goes from unpaid, to reported by the customer, to confirmed by the provider. If they disagree, it's marked disputed and a finance admin resolves it with evidence. The database refuses to record that Hela collected funds. Commission is a placeholder 0% receivable. The finance CSV export contains no personal data.
+- **Incidents (FR-SAF, Q50, Q56–Q58):** incidents can be filed with or without a booking. The description is encrypted, only the reporter can view their own case, and urgent cases are flagged at once. Responders work a queue ordered by urgency with response deadlines, and every case view is logged. Putting a booking on hold is always an explicit action by a person. Emergency guidance is shown as `PENDING LOCAL VALIDATION`.
+- **Reviews (FR-REV-01, Q59):** only the customer can review, only after completion, and only once. Review text waits for moderation, and possible phone numbers or emails are flagged.
+
+**Infrastructure**
+- **Notifications (FR-NOT, Q60):** an outbox with retries and duplicate protection. Messages never contain addresses, names or notes; they go through the sandbox SMS adapter.
+- **Jobs (Q69):** a durable job queue with leases, backoff and dead-lettering, plus an operations queue and alerts (A02).
+
+### Known gaps (tracked for the R1 gate)
 
 - No real SMS vendor (DEC-08). Outside dev, the app refuses to pretend an SMS was sent.
 - Keys come from environment variables (`EnvKeyProvider`). A managed KMS provider is needed before staging.
 - Admin TOTP recovery is an operator procedure only, with no self-service yet.
 - New policy versions are created by the operator CLI or SQL as the owner role. An admin API with two-admin approval for policy versions comes later.
-- Provider service area and availability are owned by M03.
+- The race tests use a single Postgres instance and threads. Spec §19 asks for multi-process worker and crash tests before the R1 gate.
+- No real routing or ETA (Q44). Distances are straight-line, are labelled as approximate, and no arrival time is shown.
+- There's no rescheduling or job extension (Q33, Q52), and no on-demand bookings (Q26). Each is either deferred or behind a disabled setting.
+- Operations admins handle disputes and holds through the generic transitions endpoint. A dedicated dispute-adjudication screen comes with the R2 admin web.
 - Infected files found by a rescan have their encryption key destroyed. The leftover ciphertext stays in storage, unreadable, until a retention job exists (DEC-09).
 - `minio/minio` is no longer published on Docker Hub. The stack uses Chainguard's build, pinned by digest.

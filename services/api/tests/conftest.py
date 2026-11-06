@@ -273,3 +273,134 @@ def gaps(app):
         with tx(app.state.services.engine) as con:
             return provider_category_gaps(con, provider_id, category, at)
     return do
+
+
+# --- booking engine (M03) -----------------------------------------------------------------------------
+
+CUSTOMER_PIN = (7.2906, 80.6337)   # inside the synthetic Kandy polygon
+PROVIDER_SPOTS = {'near': (7.2910, 80.6340), 'mid': (7.2990, 80.6420), 'far': (7.3150, 80.6600)}
+
+
+def drain(app, rounds=20):
+    """Run due background jobs until none are left (synchronous stand-in for hela.worker)."""
+    from hela.booking.jobs import handlers
+    from hela.core.jobs import run_due
+    svc = app.state.services
+    total = 0
+    for _ in range(rounds):
+        n = run_due(svc.engine, handlers(svc), worker='test')
+        total += n
+        if not n:
+            break
+    return total
+
+
+def tomorrow_at(hour, minute=0):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    zone = ZoneInfo('Asia/Colombo')
+    day = (datetime.now(zone) + timedelta(days=1)).date()
+    return datetime(day.year, day.month, day.day, hour, minute, tzinfo=zone)
+
+
+class World:
+    def __init__(self, client, app, db, login, cipher):
+        self.client, self.app, self.db, self.login, self.cipher = client, app, db, login, cipher
+        self.region_id = None
+        self._admin_id = None
+
+    def fixture_admin(self):
+        if not self._admin_id:
+            self._admin_id = str(self.db('''INSERT INTO admin_users(username, password_hash, created_by)
+                                            VALUES ('fixture.admin', 'x', 'test') RETURNING id''')[0]['id'])
+        return self._admin_id
+
+    def customer(self, phone='+94770000001'):
+        tokens = self.login(phone=phone)
+        r = self.client.post('/v1/addresses', headers=bearer(tokens),
+                             json={'label': 'Home', 'address_text': '12 Synthetic Lane, Kandy', 'lat': CUSTOMER_PIN[0],
+                                   'lon': CUSTOMER_PIN[1], 'pin_confirmed': True})
+        assert r.status_code == 201, r.text
+        return tokens, r.json()['id']
+
+    def provider(self, phone, spot='near', categories=('household_cleaning',), radius_km=10, hours=(6, 20)):
+        """An approved provider created directly in the database (M02 covers the approval flow itself)."""
+        from hela.cli import PILOT_EVIDENCE
+        tokens = self.login(phone=phone)
+        pid = self.client.get('/v1/me', headers=bearer(tokens)).json()['id']
+        admin = self.fixture_admin()
+        enc = lambda v, ctx: self.cipher.encrypt(v, context=ctx)  # noqa: E731
+        self.db('''INSERT INTO provider_profiles(user_id, application_state, legal_name_enc, date_of_birth_enc,
+                       identity_verified_at, identity_verified_by, age_verified_at, age_verified_by, age_verification_method)
+                   VALUES (:u, 'approved', :n, :d, now(), :a, now(), :a, 'id_document_inspected')''',
+                u=pid, n=enc('Fixture Provider', 'provider_profiles.legal_name'),
+                d=enc('1990-01-01', 'provider_profiles.dob'), a=admin)
+        self.db("INSERT INTO user_personas(user_id, persona) VALUES (:u, 'provider')", u=pid)
+        self.db("UPDATE users SET display_name = :n WHERE id = :u", n=f'Provider {phone[-3:]}', u=pid)
+        for req in PILOT_EVIDENCE:
+            for _ in range(req['count']):
+                self.db('''INSERT INTO provider_evidence(provider_id, evidence_type, object_key, wrapped_data_key, sha256,
+                               media_type, size_bytes, scan_state, review_state, next_review_due, reviewed_by, reviewed_at)
+                           VALUES (:p, :t, 'fixture', '\\x00', 'x', 'application/pdf', 1, 'clean', 'accepted',
+                                   current_date + 365, :a, now())''', p=pid, t=req['type'], a=admin)
+        for cat in categories:
+            self.db('''INSERT INTO provider_category_approvals(provider_id, category_code, policy_id, status, valid_from,
+                           valid_until, decided_by, decided_at)
+                       SELECT :p, :c, id, 'approved', now() - interval '1 day', now() + interval '300 days', :a, now()
+                       FROM category_policies WHERE category_code = :c AND status = 'active' ''', p=pid, c=cat, a=admin)
+        lat, lon = PROVIDER_SPOTS[spot]
+        self.client.put('/v1/provider/service-area', headers=bearer(tokens),
+                        json={'lat': lat, 'lon': lon, 'radius_km': radius_km}).raise_for_status()
+        slots = [{'weekday': d, 'start_local': f'{hours[0]:02d}:00', 'end_local': f'{hours[1]:02d}:00'} for d in range(7)]
+        self.client.put('/v1/provider/availability', headers=bearer(tokens), json={'slots': slots}).raise_for_status()
+        return tokens, pid
+
+    def quote(self, tokens, address_id, *, category='household_cleaning', start=None, minutes=120):
+        start = start or tomorrow_at(10)
+        return self.client.post('/v1/quotes/preview', headers=bearer(tokens),
+                                json={'category_code': category, 'address_id': address_id, 'start_at': start.isoformat(),
+                                      'duration_minutes': minutes})
+
+    def request(self, tokens, address_id, *, key=None, tasks=('dusting', 'tidying'), beneficiary_id=None, **quote_kw):
+        import uuid as _uuid
+        q = self.quote(tokens, address_id, **quote_kw)
+        assert q.status_code == 201, q.text
+        q = q.json()
+        a = self.client.post(f"/v1/quotes/{q['quote_id']}/accept", headers=bearer(tokens),
+                             json={'policy_version': q['policy_version']})
+        assert a.status_code == 200, a.text
+        body = {'quote_id': q['quote_id'], 'task_codes': list(tasks), 'task_note': 'Gate code is synthetic'}
+        if beneficiary_id:
+            body['beneficiary_id'] = beneficiary_id
+        r = self.client.post('/v1/requests', headers={**bearer(tokens), 'Idempotency-Key': key or f'k-{_uuid.uuid4().hex}'},
+                             json=body)
+        assert r.status_code == 201, r.text
+        return r.json()['request_id']
+
+    def offers(self, tokens):
+        return self.client.get('/v1/offers/me', headers=bearer(tokens)).json()
+
+    def accept(self, tokens, offer_id, key=None):
+        import uuid as _uuid
+        return self.client.post(f'/v1/offers/{offer_id}/accept',
+                                headers={**bearer(tokens), 'Idempotency-Key': key or f'k-{_uuid.uuid4().hex}'})
+
+    def move(self, tokens, booking_id, target, version, **extra):
+        import uuid as _uuid
+        return self.client.post(f'/v1/bookings/{booking_id}/transitions',
+                                headers={**bearer(tokens), 'Idempotency-Key': f'k-{_uuid.uuid4().hex}'},
+                                json={'target_status': target, 'expected_version': version, **extra})
+
+    def pin(self, customer_tokens, booking_id):
+        return self.client.get(f'/v1/bookings/{booking_id}', headers=bearer(customer_tokens)).json()['checkin_pin']
+
+
+@pytest.fixture
+def world(categories, client, app, db, login, cipher, region):
+    from hela.cli import SYNTHETIC_RATES
+    for code, rate in SYNTHETIC_RATES.items():
+        db("INSERT INTO price_rules(category_code, version, status, hourly_rate_minor) VALUES (:c, 1, 'active', :r)",
+           c=code, r=rate)
+    w = World(client, app, db, login, cipher)
+    w.region_id = region()
+    return w

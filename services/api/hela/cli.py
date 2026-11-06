@@ -51,6 +51,10 @@ CATEGORIES = [
 PROHIBITED = ['medication_administration', 'clinical_tasks', 'hazardous_work', 'working_at_height',
               'handling_cash_over_limit', 'unsupervised_child_care']
 
+# Q30: synthetic test-only rates in LKR minor units (cents). No rate is approved for real commerce (DEC-06).
+SYNTHETIC_RATES = {'household_cleaning': 120000, 'laundry_kitchen': 110000, 'errands': 100000,
+                   'general_assistance': 100000}
+
 NOTICES = [
     ('privacy_notice', 'Privacy notice (DRAFT, UNAPPROVED)',
      'Synthetic development text. The final privacy notice requires legal review before any real use.'),
@@ -111,6 +115,9 @@ def seed_synthetic(_args) -> int:
                 c=code, a=json.dumps(tasks), p=json.dumps(PROHIBITED), e=json.dumps(PILOT_EVIDENCE), sg=safeguards,
                 t=json.dumps({'note': 'Synthetic UNAPPROVED fixture (DEC-03/DEC-04 pending)',
                               'cancellation': {'fee_lkr_minor': 0}}))
+        for code, rate in SYNTHETIC_RATES.items():
+            run(con, '''INSERT INTO price_rules(category_code, version, status, hourly_rate_minor)
+                        VALUES (:c, 1, 'active', :r) ON CONFLICT (category_code, version) DO NOTHING''', c=code, r=rate)
         for code, title, body in NOTICES:
             run(con, '''INSERT INTO consent_notices(code, version, language, title, body, translation_status)
                         VALUES (:c, 1, 'en', :t, :b, 'source') ON CONFLICT DO NOTHING''', c=code, t=title, b=body)

@@ -45,6 +45,22 @@ class Settings(BaseSettings):
     evidence_token_seconds: int = Field(default=60, le=60)
     min_provider_age: int = Field(default=18, ge=18)  # proposed pilot rule, pending local approval (Q13)
 
+    # Booking engine (synthetic defaults, Q25, Q27, Q41-Q43, Q47-Q49, Q57). Tuning required before any pilot.
+    min_notice_minutes: int = 120
+    max_advance_days: int = 30
+    duration_step_minutes: int = 30
+    quote_ttl_seconds: int = 900
+    offer_ttl_seconds: int = 600
+    max_dispatch_rounds: int = 5
+    parallel_offers: int = Field(default=1, ge=1, le=3)
+    travel_buffer_minutes: int = 30
+    request_expiry_lead_minutes: int = 60
+    consent_ttl_minutes: int = 24 * 60
+    completion_review_hours: int = 48
+    pin_max_attempts: int = 5
+    matching_config_version: str = 'synthetic-v1'
+    local_timezone: str = 'Asia/Colombo'
+
     # Sandbox SMS inbox: only mounted when env == 'dev' and a token is configured.
     dev_inbox_token: str | None = None
 

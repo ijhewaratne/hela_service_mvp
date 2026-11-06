@@ -364,8 +364,9 @@ def approval_history(approval_id: UUID, admin: AdminPrincipal = Depends(reviewer
 # --- suspension (INV-11) --------------------------------------------------------------------------------
 
 def on_provider_suspended(con, provider_id: str) -> dict:
-    """Extension point for M03: revoke pending offers and alert incident responders about active jobs."""
-    return {'offers_revoked': 0, 'active_jobs_flagged': 0}
+    """Revoke pending offers and flag active jobs for human triage (booking engine owns the details)."""
+    from ..booking.admin import provider_suspended_effects
+    return provider_suspended_effects(con, provider_id)
 
 
 @router.post('/providers/{provider_id}/suspend')
