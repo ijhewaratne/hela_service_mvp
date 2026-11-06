@@ -1,0 +1,24 @@
+id,priority,workstream,user_story_or_deliverable,acceptance_criterion
+HS-001,P0,Identity,OTP login; language selection,"OTP throttled, no secrets logged, SI/TA/EN supported"
+HS-002,P0,Access,RBAC / object authorization,"Users cannot access other household bookings, documents, or incidents"
+HS-003,P0,Catalog,Versioned service categories and feature flags,Disabled category cannot be requested via UI or API
+HS-004,P0,Customer,Household addresses and authorized beneficiary booking,Exact address disclosed only to accepted/authorized provider
+HS-005,P0,Provider,Evidence upload and review queue,"Review metadata recorded, access scoped to authorized admins"
+HS-006,P0,Provider,Per-category verification status and expiry,Unapproved/expired/suspended categories excluded from matching
+HS-007,P0,Provider,Availability calendar and service radius,Scheduled booking matched only within valid slot/radius
+HS-008,P0,Pricing,Fixed/hourly/quote-required preview,LKR amount or explicit needs-quote; policy version stored
+HS-009,P0,Booking,Create request with idempotency,Double-submit creates exactly one request
+HS-010,P0,Matching,Eligibility filter and explanation log,All mandatory predicates checked at offer and acceptance
+HS-011,P0,Dispatch,Expiring provider offers with concurrency protection,"Exactly one accepted offer, no double assignment"
+HS-012,P0,Booking,Booking state machine and event history,All role/state transitions validated and appended to log
+HS-013,P0,Safety,"Incident reporting, severity and human queue",Safety concerns escalated and offer suspension available
+HS-014,P0,Admin,Provider vetting and booking intervention portal,All privileged changes have actor/reason/time audit
+HS-015,P0,Settlement,Offline cash/external reported settlement and commission due,Never confuses customer report with platform collected funds
+HS-016,P0,Localization,Sinhala/Tamil/English UX and reviewed safety strings,All critical notices available and manually reviewed
+HS-017,P0,Quality,Synthetic concurrency/access/security tests,T001–T015 acceptance scenarios pass in CI
+HS-018,P1,Notifications,SMS/push/email adapter,Pending and failed deliveries visible; retries safe
+HS-019,P1,Provider app,Limited en-route ETA; arrival code,No location tracking during in-home work
+HS-020,P1,Support,"Disputes, reviews, refund/settlement case routing",Support can trace case and related booking history
+HS-021,P1,Operations,Regional pilot configuration / reports,Can disable service or region without code deployment
+HS-022,P2,Expansion,Trade categories with custom skill checks,No activation until skill/safety policies signed off
+HS-023,P2,Expansion,Later child supervision feasibility,Remains disabled pending safeguarding and legal review

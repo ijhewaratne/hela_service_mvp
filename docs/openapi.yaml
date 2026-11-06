@@ -1,0 +1,394 @@
+openapi: 3.0.3
+info:
+  title: Hela Service Marketplace API
+  version: 0.1.0
+  description: >-
+    Preliminary independent API design. This contract does NOT describe PickMe's private APIs.
+    All write endpoints require RBAC, idempotency and server-side state validation.
+servers:
+  - url: https://api.hela.example/v1
+    description: Placeholder only; no service is deployed
+security:
+  - bearerAuth: []
+tags:
+  - name: Catalog
+  - name: Customers
+  - name: Providers
+  - name: Requests
+  - name: Offers
+  - name: Bookings
+  - name: Admin
+paths:
+  /categories:
+    get:
+      tags: [Catalog]
+      summary: List enabled service categories and policies
+      responses:
+        '200':
+          description: Categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Category'
+  /customers/me/addresses:
+    get:
+      tags: [Customers]
+      summary: List caller-owned household addresses
+      responses:
+        '200':
+          description: Addresses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Address'
+    post:
+      tags: [Customers]
+      summary: Add authorized household address
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddressInput'
+      responses:
+        '201':
+          description: Saved address
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Address'
+        '400': {description: Invalid coordinates or details}
+  /providers/me:
+    get:
+      tags: [Providers]
+      summary: Get own provider profile and approved categories
+      responses:
+        '200':
+          description: Provider profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderProfile'
+  /providers/me/availability:
+    put:
+      tags: [Providers]
+      summary: Replace own future availability slots
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/AvailabilitySlot'
+      responses:
+        '204': {description: Availability updated}
+        '409': {description: Conflicts with existing assignments}
+  /quotes/preview:
+    post:
+      tags: [Requests]
+      summary: Preview service price; does not guarantee a provider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuoteInput'
+      responses:
+        '200':
+          description: Indicative quote and policy version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+        '422': {description: Unsupported category or details}
+  /requests:
+    post:
+      tags: [Requests]
+      summary: Submit service request; idempotent per booker and key
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceRequestInput'
+      responses:
+        '201':
+          description: Request created, not necessarily matched
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceRequest'
+        '409': {description: Duplicate/conflicting action}
+        '422': {description: Disabled or invalid service category}
+  /requests/{requestId}:
+    get:
+      tags: [Requests]
+      summary: View own request, or authorized admin view
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Request status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceRequest'
+        '404': {description: Not found or not authorized}
+  /offers/me:
+    get:
+      tags: [Offers]
+      summary: List offers eligible for authenticated provider
+      responses:
+        '200':
+          description: Time-limited offers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Offer'
+  /offers/{offerId}/accept:
+    post:
+      tags: [Offers]
+      summary: Atomically accept unexpired eligible offer
+      parameters:
+        - $ref: '#/components/parameters/OfferId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Accepted booking
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '409': {description: Offer expired, revoked, category ineligible, or assignment already accepted}
+  /offers/{offerId}/decline:
+    post:
+      tags: [Offers]
+      summary: Decline own offer
+      parameters:
+        - $ref: '#/components/parameters/OfferId'
+      responses:
+        '204': {description: Declined}
+        '409': {description: Offer no longer open}
+  /bookings/{bookingId}:
+    get:
+      tags: [Bookings]
+      summary: Get booking if caller is booker, assigned provider, or authorized admin
+      parameters:
+        - $ref: '#/components/parameters/BookingId'
+      responses:
+        '200':
+          description: Booking
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '404': {description: Not found or not authorized}
+  /bookings/{bookingId}/transitions:
+    post:
+      tags: [Bookings]
+      summary: Perform server-validated booking transition
+      parameters:
+        - $ref: '#/components/parameters/BookingId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionInput'
+      responses:
+        '200':
+          description: Updated booking
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '409': {description: Invalid state/version/role transition}
+  /bookings/{bookingId}/incidents:
+    post:
+      tags: [Bookings]
+      summary: Report complaint, safety concern or settlement dispute
+      parameters:
+        - $ref: '#/components/parameters/BookingId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IncidentInput'
+      responses:
+        '201':
+          description: Case opened
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Incident'
+  /admin/providers/{providerId}/category-approvals:
+    post:
+      tags: [Admin]
+      summary: Approve, deny or revoke category eligibility with audited reason
+      parameters:
+        - name: providerId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryApprovalInput'
+      responses:
+        '204': {description: Decision recorded with audit event}
+        '403': {description: Reviewer lacks permission}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 8, maxLength: 100}
+    RequestId:
+      name: requestId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    OfferId:
+      name: offerId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    BookingId:
+      name: bookingId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+  schemas:
+    Category:
+      type: object
+      required: [id, code, name, enabled, quote_method]
+      properties:
+        id: {type: string, format: uuid}
+        code: {type: string}
+        name: {type: string}
+        enabled: {type: boolean}
+        quote_method: {type: string, enum: [fixed, hourly, quote_required]}
+    AddressInput:
+      type: object
+      required: [label, street_text, lat, lng]
+      properties:
+        label: {type: string}
+        street_text: {type: string}
+        lat: {type: number, minimum: -90, maximum: 90}
+        lng: {type: number, minimum: -180, maximum: 180}
+    Address:
+      allOf:
+        - $ref: '#/components/schemas/AddressInput'
+        - type: object
+          required: [id]
+          properties:
+            id: {type: string, format: uuid}
+    ProviderProfile:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        display_name: {type: string}
+        profile_status: {type: string, enum: [applicant, under_review, active, suspended]}
+        approved_category_ids:
+          type: array
+          items: {type: string, format: uuid}
+    AvailabilitySlot:
+      type: object
+      required: [start_at, end_at]
+      properties:
+        start_at: {type: string, format: date-time}
+        end_at: {type: string, format: date-time}
+    QuoteInput:
+      type: object
+      required: [category_id, duration_minutes, address_id, scheduled_start_at]
+      properties:
+        category_id: {type: string, format: uuid}
+        duration_minutes: {type: integer, minimum: 30}
+        address_id: {type: string, format: uuid}
+        scheduled_start_at: {type: string, format: date-time}
+        task_details: {type: string, maxLength: 2000}
+    Quote:
+      type: object
+      required: [currency, pricing_method, is_estimate, policy_version]
+      properties:
+        amount_minor: {type: integer, minimum: 0, nullable: true, description: 'LKR cents; null for quote-required tasks'}
+        currency: {type: string, enum: [LKR]}
+        pricing_method: {type: string, enum: [fixed, hourly, quote_required]}
+        is_estimate: {type: boolean}
+        policy_version: {type: string}
+    ServiceRequestInput:
+      allOf:
+        - $ref: '#/components/schemas/QuoteInput'
+        - type: object
+          properties:
+            beneficiary_authorized: {type: boolean, default: false}
+            quote_policy_version: {type: string}
+    ServiceRequest:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        status: {type: string, enum: [requested, offering, accepted, cancelled, unfulfilled]}
+        category_id: {type: string, format: uuid}
+        scheduled_start_at: {type: string, format: date-time}
+    Offer:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        request_id: {type: string, format: uuid}
+        expires_at: {type: string, format: date-time}
+        status: {type: string, enum: [pending, accepted, declined, expired, revoked]}
+    Booking:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        request_id: {type: string, format: uuid}
+        provider_id: {type: string, format: uuid}
+        status: {type: string, enum: [accepted, en_route, arrived, in_progress, completed_pending_confirmation, completed, disputed, incident_hold, cancelled, cancelled_after_review]}
+        version: {type: integer, minimum: 1}
+    TransitionInput:
+      type: object
+      required: [to_status, expected_version]
+      properties:
+        to_status: {type: string}
+        expected_version: {type: integer, minimum: 1}
+        reason_code: {type: string}
+        note: {type: string, maxLength: 1000}
+    IncidentInput:
+      type: object
+      required: [type, severity, description]
+      properties:
+        type: {type: string, enum: [service_problem, safety, privacy, harassment, cash_dispute, other]}
+        severity: {type: string, enum: [low, medium, high, critical]}
+        description: {type: string, minLength: 10, maxLength: 5000}
+    Incident:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        status: {type: string, enum: [open, investigating, resolved, closed]}
+    CategoryApprovalInput:
+      type: object
+      required: [category_id, action, reason_code]
+      properties:
+        category_id: {type: string, format: uuid}
+        action: {type: string, enum: [approve, deny, revoke]}
+        reason_code: {type: string}
+        expires_at: {type: string, format: date-time, nullable: true}
