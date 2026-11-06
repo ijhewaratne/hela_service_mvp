@@ -110,6 +110,21 @@ def payment_ack(booking_id: UUID, body: PaymentAckIn, user: UserPrincipal = Depe
         return _public(one(con, 'SELECT * FROM settlements WHERE booking_id = :b', b=booking_id))
 
 
+@router.get('/admin/settlements')
+def settlement_desk(status: str = Query(default='DISPUTED', pattern=r'^[A-Z_]{4,30}$'),
+                    admin: AdminPrincipal = Depends(require_permission('finance.reconcile')),
+                    svc: Services = Depends(services)):
+    """A07: reported vs acknowledged payments. Amounts and states only; no names, phones or notes."""
+    admin.require('finance.reconcile')
+    with tx(svc.engine) as con:
+        rows = many(con, '''SELECT s.booking_id, s.status, s.agreed_amount_minor, s.currency, s.resolution, s.updated_at,
+                                   r.category_code, r.start_at
+                            FROM settlements s JOIN bookings b ON b.id = s.booking_id
+                            JOIN service_requests r ON r.id = b.request_id
+                            WHERE s.status = :s ORDER BY s.updated_at LIMIT 200''', s=status)
+    return [{**r, 'booking_id': str(r['booking_id']), 'platform_collected_funds': False} for r in rows]
+
+
 @router.post('/admin/settlements/{booking_id}/resolve')
 def resolve(booking_id: UUID, body: ResolveIn, admin: AdminPrincipal = Depends(require_permission('finance.reconcile')),
             svc: Services = Depends(services)):

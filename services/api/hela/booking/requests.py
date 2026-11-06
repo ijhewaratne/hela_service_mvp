@@ -19,7 +19,7 @@ from ..audit import service as audit
 from ..authz.deps import UserPrincipal
 from ..core import idempotency
 from ..core.config import Settings
-from ..core.db import one, run, tx
+from ..core.db import many, one, run, tx
 from ..core.errors import ApiError
 from ..core.jobs import enqueue
 from ..core.services import Services, services
@@ -247,6 +247,17 @@ def _start_consent(con: Connection, svc: Services, request_id: str, beneficiary_
     notify(con, recipient_type='beneficiary', recipient_id=beneficiary_id, template_key='consent.request',
            dedupe_key=f'consent:{cid}', params={'consent_id': cid, 'code': code})
     enqueue(con, 'consent.expire', {'consent_id': cid}, run_at=expires, dedupe_key=f'consent-expire:{cid}')
+
+
+@router.get('/requests')
+def my_requests(user: UserPrincipal = Depends(customer), svc: Services = Depends(services)):
+    """C12 history: the customer's own requests, newest first, with the booking if one exists."""
+    with tx(svc.engine) as con:
+        rows = many(con, '''SELECT r.*, b.id AS booking_id, b.status AS booking_status FROM service_requests r
+                            LEFT JOIN bookings b ON b.request_id = r.id
+                            WHERE r.customer_id = :c ORDER BY r.created_at DESC LIMIT 100''', c=user.user_id)
+    return [{**_request_view(r), 'booking_id': str(r['booking_id']) if r['booking_id'] else None,
+             'booking_status': r['booking_status']} for r in rows]
 
 
 @router.get('/requests/{request_id}')

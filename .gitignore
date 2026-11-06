@@ -12,3 +12,6 @@ dist/
 build/
 sbom*.json
 .ruff_cache/
+node_modules/
+apps/admin/dist/
+*.tsbuildinfo

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import redis
 from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from .audit.routes import router as audit_router
@@ -49,6 +50,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     errors.install(app)
     app.add_middleware(SecurityMiddleware, settings=settings)
+    if settings.cors_origins:
+        app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=False,
+                           allow_methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+                           allow_headers=['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Correlation-ID'],
+                           expose_headers=['X-Correlation-ID'], max_age=600)
 
     @app.get('/health', tags=['ops'])
     def health(svc: Services = Depends(services)):

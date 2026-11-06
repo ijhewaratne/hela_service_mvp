@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     matching_config_version: str = 'synthetic-v1'
     local_timezone: str = 'Asia/Colombo'
 
+    # Browser origins allowed to call the API (the R2 admin web). No credentials/cookies are used: tokens are
+    # sent as Bearer headers, so CSRF does not apply (Q73). Keep this list explicit; never '*'.
+    cors_origins: list[str] = ['http://localhost:5173', 'http://127.0.0.1:5173']
+
     # Sandbox SMS inbox: only mounted when env == 'dev' and a token is configured.
     dev_inbox_token: str | None = None
 

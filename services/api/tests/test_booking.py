@@ -449,6 +449,8 @@ def test_settlement_disagreement_goes_to_finance(world, booked, client, make_adm
                        json=resolve).json()['error']['code'] == 'PERMISSION_DENIED'
     _, fclock = make_admin('fin.fred', roles=[('finance_reconciler', None)])
     fin = admin_login('fin.fred', fclock)
+    desk = client.get('/v1/admin/settlements', headers=bearer(fin)).json()
+    assert [d['booking_id'] for d in desk] == [bid] and desk[0]['status'] == 'DISPUTED'
     done = client.post(f'/v1/admin/settlements/{bid}/resolve', headers=bearer(fin), json=resolve).json()
     assert done['status'] == 'RESOLVED' and done['platform_collected_funds'] is False               # AT-016
     csv_text = client.get('/v1/admin/finance/export.csv', headers=bearer(fin)).text
@@ -689,3 +691,24 @@ def test_otp_request_during_sms_outage_is_a_clean_retryable_error(client, app, r
     app.state.services.sms = Down()
     r = client.post('/v1/auth/otp/request', json={'phone': '+94770000001'})
     assert r.status_code == 503 and r.json()['error'] == {**r.json()['error'], 'code': 'SMS_UNAVAILABLE', 'retryable': True}
+
+
+def test_history_lists_for_customer_and_provider(world, booked, client):
+    c_tok, p_tok, _, bid = booked()
+    mine = client.get('/v1/requests', headers=bearer(c_tok)).json()
+    assert len(mine) == 1 and mine[0]['booking_id'] == bid and mine[0]['booking_status'] == 'accepted'
+    jobs = client.get('/v1/provider/bookings', headers=bearer(p_tok)).json()
+    assert [j['id'] for j in jobs] == [bid] and 'address' not in jobs[0]
+    other, _ = world.provider('+94771000009')
+    assert client.get('/v1/provider/bookings', headers=bearer(other)).json() == []
+    drain(world.app)
+    notes = client.get('/v1/me/notifications', headers=bearer(c_tok)).json()
+    assert {'template_key': 'request.accepted', 'status': 'sent'}.items() <= notes[0].items()
+
+
+def test_cors_allows_only_configured_admin_origin(client, reset):
+    ok = client.options('/v1/regions', headers={'Origin': 'http://localhost:5173', 'Access-Control-Request-Method': 'GET'})
+    assert ok.headers.get('access-control-allow-origin') == 'http://localhost:5173'
+    assert 'access-control-allow-credentials' not in ok.headers
+    bad = client.options('/v1/regions', headers={'Origin': 'https://evil.example', 'Access-Control-Request-Method': 'GET'})
+    assert 'access-control-allow-origin' not in bad.headers

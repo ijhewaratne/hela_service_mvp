@@ -265,6 +265,19 @@ def view(con: Connection, svc: Services, b: dict, role: str) -> dict:
     return out
 
 
+@router.get('/provider/bookings')
+def provider_jobs(user: UserPrincipal = Depends(provider_persona), svc: Services = Depends(services)):
+    """P06: jobs where this provider is the provider of record (never jobs taken away by reassignment)."""
+    with tx(svc.engine) as con:
+        rows = many(con, '''SELECT b.id, b.status, b.version, r.category_code, r.start_at, r.end_at, a.area_label
+                            FROM booking_assignments x JOIN bookings b ON b.id = x.booking_id
+                            JOIN service_requests r ON r.id = b.request_id
+                            JOIN customer_addresses a ON a.id = r.address_id
+                            WHERE x.provider_id = :p AND (x.active OR x.end_reason NOT LIKE 'reassigned%')
+                            ORDER BY r.start_at DESC LIMIT 100''', p=user.user_id)
+    return [{**r, 'id': str(r['id'])} for r in rows]
+
+
 @router.get('/bookings/{booking_id}')
 def get_booking(booking_id: UUID, user: UserPrincipal = Depends(current_user), svc: Services = Depends(services)):
     with tx(svc.engine) as con:

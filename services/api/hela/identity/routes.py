@@ -216,6 +216,15 @@ def end_session(session_id: str, user: UserPrincipal = Depends(current_user), sv
                      entity_type='session', entity_id=session_id)
 
 
+@router.get('/me/notifications')
+def my_notifications(user: UserPrincipal = Depends(current_user), svc: Services = Depends(services)):
+    """FR-NOT-03: what was sent and whether it is still pending. Bodies are template keys, not message text."""
+    with tx(svc.engine) as con:
+        return many(con, '''SELECT template_key, status, created_at, sent_at FROM notifications
+                            WHERE recipient_type = 'user' AND recipient_id = :u ORDER BY created_at DESC LIMIT 50''',
+                    u=user.user_id)
+
+
 @router.get('/notices/current')
 def current_notices(language: Literal['si', 'ta', 'en'] = 'en', svc: Services = Depends(services)):
     """Latest active version of each notice, in the requested language, falling back to English."""

@@ -73,6 +73,27 @@ jobs:
           name: sbom
           path: services/api/sbom.cdx.json
 
+  admin-web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: apps/admin/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm audit   # dev toolchain too: the dev server is network-exposed while running
+
   secrets:
     runs-on: ubuntu-latest
     steps:
