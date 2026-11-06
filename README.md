@@ -23,8 +23,9 @@
 |---|---|
 | M01 Data foundation: Postgres/PostGIS, migrations, identity, authorization, audit | Done |
 | M02 Provider trust: categories, onboarding, evidence storage, approvals, expiry | Done |
-| M03 Booking engine: addresses, quotes, requests, matching, offers, bookings, settlement, incidents | **Done** |
-| R1 gate hardening: Postgres-level multi-worker tests, load test, security review prep | Next |
+| M03 Booking engine: addresses, quotes, requests, matching, offers, bookings, settlement, incidents | Done |
+| R1 gate hardening: multi-process/crash tests, load test, backup drill, ASVS self-assessment | **Done**: see [`docs/r1_gate/R1_GATE_REPORT.md`](docs/r1_gate/R1_GATE_REPORT.md) |
+| R2: Flutter customer/provider apps, React admin web | Next, after the R1 gate review |
 | R2: Flutter customer/provider apps, React admin | After the R1 gate |
 
 ## Run locally (macOS)
@@ -58,6 +59,9 @@ Uploads made while it is unavailable are stored encrypted as `pending` and canno
 `python -m hela.cli rescan-evidence` marks them clean. Run `python -m hela.cli expire-verifications` daily.
 
 **Tests** (needs the Compose stack running): `cd services/api && .venv/bin/python -m pytest`
+(112 tests, including real OS-process races, a SIGKILL crash test and real ClamAV. Add `-m "not multiprocess"` for a faster run.)
+
+**Load test and restore drill:** see `services/api/tests/load/` and `scripts/backup_restore_check.sh`. Results are in the R1 gate report.
 
 **Legacy prototype tests:** `cd legacy/v0_2 && HELA_DEMO_MODE=1 python -m pytest`
 

@@ -8,6 +8,8 @@ EN: dict[str, str] = {
     'auth.invalid_token': 'Your session is invalid or has expired. Sign in again.',
     'auth.session_revoked': 'This session has been signed out.',
     'auth.account_inactive': 'This account is not active. Contact support.',
+    'auth.session_idle': 'You were signed out after a period of inactivity.',
+    'error.payload_too_large': 'The request is too large.',
     'auth.otp_sent': 'If this number can receive messages, a code has been sent.',
     'auth.otp_invalid': 'The code is incorrect or has expired.',
     'auth.otp_locked': 'Too many attempts. Request a new code.',

@@ -61,9 +61,11 @@ def rotate_refresh(con: Connection, settings: Settings, refresh_token: str,
     """Returns (tokens, None) or (None, error). Errors are returned, not raised, so a reuse-triggered
     revocation still commits before the caller raises."""
     row = one(con, '''SELECT rt.id, rt.rotated_at, rt.expires_at < now() AS expired, s.id AS session_id,
-                             s.subject_id, s.subject_type, s.revoked_at, s.expires_at < now() AS session_expired
+                             s.subject_id, s.subject_type, s.revoked_at, s.expires_at < now() AS session_expired,
+                             s.subject_type = 'admin' AND s.last_seen_at < now() - make_interval(mins => :idle) AS idle
                       FROM refresh_tokens rt JOIN sessions s ON s.id = rt.session_id
-                      WHERE rt.token_hash = :h FOR UPDATE OF rt, s''', h=sha256_hex(refresh_token))
+                      WHERE rt.token_hash = :h FOR UPDATE OF rt, s''', h=sha256_hex(refresh_token),
+              idle=settings.admin_idle_minutes)
     invalid = ApiError(401, 'REFRESH_INVALID', 'auth.refresh_invalid')
     if row is None or row['subject_type'] != subject_type:
         return None, invalid
@@ -74,7 +76,7 @@ def rotate_refresh(con: Connection, settings: Settings, refresh_token: str,
             audit.record(con, actor_type=subject_type, actor_id=subject, action='session.refresh_reuse_detected',
                          entity_type='session', entity_id=sid)
         return None, ApiError(401, 'REFRESH_REUSED', 'auth.refresh_reused')
-    if row['revoked_at'] is not None or row['expired'] or row['session_expired']:
+    if row['revoked_at'] is not None or row['expired'] or row['session_expired'] or row['idle']:
         return None, invalid
     state_sql = ("SELECT account_state = 'active' AS ok FROM users WHERE id = :id" if subject_type == 'user'
                  else "SELECT state = 'active' AS ok FROM admin_users WHERE id = :id")

@@ -26,7 +26,7 @@ REDIS_URL = os.environ.get('HELA_TEST_REDIS_URL', 'redis://127.0.0.1:56379/15')
 ADMIN_PASSWORD = 'synthetic-admin-password-0001'
 
 # Reference data seeded by the migration survives resets.
-_KEEP = {'permissions', 'admin_roles', 'admin_role_permissions', 'audit_logs', 'alembic_version',
+_KEEP = {'permissions', 'admin_roles', 'admin_role_permissions', 'audit_logs', 'audit_chain', 'alembic_version',
          'spatial_ref_sys'}
 
 
@@ -70,7 +70,9 @@ def reset(owner_engine, settings):
         con.execute(text(f'TRUNCATE {", ".join(wipe)} RESTART IDENTITY CASCADE'))
         # Test-only: the owner may bypass the append-only trigger to start each test with an empty chain.
         con.execute(text('ALTER TABLE audit_logs DISABLE TRIGGER audit_no_truncate'))
-        con.execute(text('TRUNCATE audit_logs RESTART IDENTITY'))
+        con.execute(text('ALTER TABLE audit_chain DISABLE TRIGGER audit_chain_no_truncate'))
+        con.execute(text('TRUNCATE audit_chain, audit_logs RESTART IDENTITY'))
+        con.execute(text('ALTER TABLE audit_chain ENABLE TRIGGER audit_chain_no_truncate'))
         con.execute(text('ALTER TABLE audit_logs ENABLE TRIGGER audit_no_truncate'))
     import redis
     redis.Redis.from_url(REDIS_URL).flushdb()
@@ -281,14 +283,14 @@ CUSTOMER_PIN = (7.2906, 80.6337)   # inside the synthetic Kandy polygon
 PROVIDER_SPOTS = {'near': (7.2910, 80.6340), 'mid': (7.2990, 80.6420), 'far': (7.3150, 80.6600)}
 
 
-def drain(app, rounds=20):
+def drain(app, rounds=40):
     """Run due background jobs until none are left (synchronous stand-in for hela.worker)."""
     from hela.booking.jobs import handlers
     from hela.core.jobs import run_due
     svc = app.state.services
     total = 0
     for _ in range(rounds):
-        n = run_due(svc.engine, handlers(svc), worker='test')
+        n = run_due(svc.engine, handlers(svc), worker='test', limit=50)
         total += n
         if not n:
             break

@@ -87,8 +87,11 @@ def request_otp(body: OtpRequestIn, request: Request, svc: Services = Depends(se
                         ttl=timedelta(seconds=s.otp_ttl_seconds))
         cid = str(challenge['id'])
         run(con, 'UPDATE otp_challenges SET code_hash = :h WHERE id = :id', h=_code_hash(svc, cid, code), id=cid)
-        svc.sms.send(con, phone_lookup=phone_lookup, phone_e164=body.phone,
-                     body=f'Hela Service code: {code}. Valid {s.otp_ttl_seconds // 60} minutes. Never share it.')
+        try:
+            svc.sms.send(con, phone_lookup=phone_lookup, phone_e164=body.phone,
+                         body=f'Hela Service code: {code}. Valid {s.otp_ttl_seconds // 60} minutes. Never share it.')
+        except Exception:  # noqa: BLE001 - any gateway failure: roll back the challenge, never claim it was sent
+            raise ApiError(503, 'SMS_UNAVAILABLE', 'error.dependency_unavailable', retryable=True) from None
     # Same response whether or not an account exists for this number (anti-enumeration).
     return {'challenge_id': cid, 'expires_in': s.otp_ttl_seconds, 'message_key': 'auth.otp_sent'}
 
@@ -109,6 +112,10 @@ def verify_otp(body: OtpVerifyIn, svc: Services = Depends(services)):
             error = ApiError(429, 'OTP_LOCKED', 'auth.otp_locked')
         elif not constant_time_equal(ch['code_hash'], _code_hash(svc, str(body.challenge_id), body.code)):
             run(con, 'UPDATE otp_challenges SET attempts = attempts + 1 WHERE id = :id', id=ch['id'])
+            if ch['attempts'] + 1 >= ch['max_attempts']:
+                # AT-025: lockouts are recorded for abuse review (pseudonymous challenge id, never the phone).
+                audit.record(con, actor_type='system', actor_id='otp', action='auth.otp_locked',
+                             entity_type='otp_challenge', entity_id=str(ch['id']))
             error = ApiError(400, 'OTP_INVALID', 'auth.otp_invalid')
         else:
             run(con, 'UPDATE otp_challenges SET consumed_at = now() WHERE id = :id', id=ch['id'])

@@ -656,3 +656,36 @@ def test_operations_queue_and_region_scope(world, client, make_admin, admin_logi
 def test_safety_guidance_is_marked_unvalidated(client, reset):
     g = client.get('/v1/safety/guidance').json()
     assert g['status'] == 'PENDING LOCAL VALIDATION' and g['emergency_contacts'] == []
+
+
+def test_sms_outage_is_retried_and_never_marked_sent(world, booked, app, db):
+    """AT-019: a failing SMS gateway leaves notifications queued and retried, never shown as delivered."""
+    class Down:
+        def send(self, con, **kw):
+            raise ConnectionError('synthetic SMS outage')
+    real = app.state.services.sms
+    db('DELETE FROM jobs')                       # start from a clean outbox; sign-in itself still needs SMS
+    c_tok, p_tok, _, bid = booked()
+    drain(app)
+    db("UPDATE notifications SET status = 'sent'")
+    app.state.services.sms = Down()
+    world.move(p_tok, bid, 'en_route', 1)       # queues customer notification during the outage
+    world.move(p_tok, bid, 'arrived', 2)
+    drain(app)
+    stuck = db("SELECT count(*) AS n FROM notifications WHERE status = 'sent' AND template_key = 'booking.updated'")[0]['n']
+    retrying = db("SELECT count(*) AS n FROM jobs WHERE kind = 'notification.deliver' AND status = 'queued' "
+                  "AND attempts >= 1 AND last_error LIKE 'ConnectionError%'")[0]['n']
+    assert stuck == 0 and retrying >= 2
+    app.state.services.sms = real
+    db("UPDATE jobs SET run_at = now() WHERE kind = 'notification.deliver'")
+    drain(app)
+    assert db("SELECT count(*) AS n FROM notifications WHERE status <> 'sent'")[0]['n'] == 0
+
+
+def test_otp_request_during_sms_outage_is_a_clean_retryable_error(client, app, reset):
+    class Down:
+        def send(self, con, **kw):
+            raise ConnectionError('synthetic SMS outage')
+    app.state.services.sms = Down()
+    r = client.post('/v1/auth/otp/request', json={'phone': '+94770000001'})
+    assert r.status_code == 503 and r.json()['error'] == {**r.json()['error'], 'code': 'SMS_UNAVAILABLE', 'retryable': True}

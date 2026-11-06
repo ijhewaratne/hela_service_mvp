@@ -26,7 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10", "httpx>=0.27,<1"]
-dev = ["ruff>=0.6,<1", "pip-audit>=2.7,<3", "cyclonedx-bom>=5,<8"]
+dev = ["ruff>=0.6,<1", "pip-audit>=2.7,<3", "cyclonedx-bom>=5,<8", "locust>=2.32,<3"]
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -35,6 +35,7 @@ include = ["hela*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q -p no:cacheprovider"
+markers = ["multiprocess: real OS-process concurrency and crash tests (slower)"]
 
 [tool.ruff]
 line-length = 130
@@ -45,5 +46,5 @@ select = ["E", "F", "I", "UP", "B", "S"]
 ignore = ["B008", "S101", "S608"]  # FastAPI Depends defaults; asserts in tests; SQL built only from fixed model keys
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S105", "S106", "E501"]
+"tests/*" = ["S105", "S106", "E501", "S603", "S607", "S311"]  # tests launch our own processes; synthetic load data
 "migrations/*" = ["E501"]

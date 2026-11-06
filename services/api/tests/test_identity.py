@@ -56,6 +56,7 @@ def test_wrong_code_counts_attempts_then_locks(client, db, cipher):
         assert _verify(client, cid, bad).json()['error']['code'] == 'OTP_INVALID'
     r = _verify(client, cid, good)
     assert r.status_code == 429 and r.json()['error']['code'] == 'OTP_LOCKED'
+    assert db("SELECT count(*) AS n FROM audit_logs WHERE action = 'auth.otp_locked'")[0]['n'] == 1
 
 
 def test_expired_and_consumed_challenges_rejected(client, db, cipher):
@@ -199,3 +200,24 @@ def test_production_refuses_dev_secrets_and_sandbox():
 
 def test_health(client):
     assert client.get('/health').json() == {'status': 'ok', 'database': 'ok', 'cache': 'ok'}
+
+
+def test_security_headers_and_no_store(client):
+    r = client.get('/v1/regions')
+    for header, value in [('x-content-type-options', 'nosniff'), ('referrer-policy', 'no-referrer'),
+                          ('x-frame-options', 'DENY'), ('cache-control', 'no-store')]:
+        assert r.headers[header] == value, header
+    assert "frame-ancestors 'none'" in r.headers['content-security-policy']
+    assert 'strict-transport-security' not in r.headers   # only behind TLS in staging/production
+
+
+def test_oversized_bodies_rejected_even_without_content_length(client):
+    big = b'{"phone": "' + b'1' * 70_000 + b'"}'
+    r = client.post('/v1/auth/otp/request', content=big, headers={'Content-Type': 'application/json'})
+    assert r.status_code == 413 and r.json()['error']['code'] == 'PAYLOAD_TOO_LARGE'
+
+    def chunks():
+        for _ in range(10):
+            yield b'x' * 10_000
+    r = client.post('/v1/auth/otp/request', content=chunks(), headers={'Content-Type': 'application/json'})
+    assert r.status_code == 413

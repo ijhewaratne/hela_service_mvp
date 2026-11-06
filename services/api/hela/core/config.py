@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     step_up_seconds: int = 300
     admin_mfa_token_seconds: int = 300
     admin_max_failed_logins: int = 5
+    admin_idle_minutes: int = 30
+    max_json_body_bytes: int = 64 * 1024
 
     # Private evidence storage (S3-compatible) and malware scanning (Q28, Q38)
     s3_endpoint: str = 'http://127.0.0.1:59000'

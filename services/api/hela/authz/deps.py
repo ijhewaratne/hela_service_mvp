@@ -49,13 +49,18 @@ def _bearer(authorization: str | None) -> str:
     return authorization.removeprefix('Bearer ').strip()
 
 
-def _live_session(con: Connection, claims: dict, subject_type: str) -> None:
+def _live_session(con: Connection, claims: dict, subject_type: str, idle_minutes: int | None = None) -> None:
     session = one(con, '''SELECT revoked_at IS NULL AND expires_at > now() AS live,
-                                 last_seen_at < now() - interval '5 minutes' AS stale
+                                 last_seen_at < now() - interval '5 minutes' AS stale,
+                                 CAST(:idle AS int) IS NOT NULL
+                                   AND last_seen_at < now() - make_interval(mins => CAST(:idle AS int)) AS idle
                           FROM sessions WHERE id = :sid AND subject_type = :t AND subject_id = :sub''',
-                  sid=claims['sid'], t=subject_type, sub=claims['sub'])
+                  sid=claims['sid'], t=subject_type, sub=claims['sub'], idle=idle_minutes)
     if not session or not session['live']:
         raise ApiError(401, 'SESSION_REVOKED', 'auth.session_revoked')
+    if session['idle']:
+        # A01: admin sessions end after inactivity; activity is tracked at 5-minute granularity.
+        raise ApiError(401, 'SESSION_IDLE_TIMEOUT', 'auth.session_idle')
     if session['stale']:
         run(con, 'UPDATE sessions SET last_seen_at = now() WHERE id = :sid', sid=claims['sid'])
 
@@ -95,7 +100,7 @@ def current_admin(svc: Services = Depends(services),
                   authorization: str | None = Header(None)) -> AdminPrincipal:
     claims = _claims(svc, _bearer(authorization), 'hela-admin')
     with tx(svc.engine) as con:
-        _live_session(con, claims, 'admin')
+        _live_session(con, claims, 'admin', svc.settings.admin_idle_minutes)
         admin = one(con, 'SELECT state FROM admin_users WHERE id = :id', id=claims['sub'])
         if not admin or admin['state'] != 'active':
             raise ApiError(403, 'ACCOUNT_INACTIVE', 'auth.account_inactive')

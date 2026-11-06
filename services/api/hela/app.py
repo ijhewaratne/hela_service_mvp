@@ -15,6 +15,7 @@ from .catalog.regions import public as region_public_router
 from .core import errors
 from .core.config import Settings, get_settings
 from .core.db import make_engine
+from .core.http import SecurityMiddleware
 from .core.services import Services, services
 from .customers import routes as customer_routes
 from .evidence.scanning import ClamdScanner, NoScanner
@@ -47,6 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         scanner=ClamdScanner(settings.clamd_host, settings.clamd_port) if settings.clamd_host else NoScanner(),
     )
     errors.install(app)
+    app.add_middleware(SecurityMiddleware, settings=settings)
 
     @app.get('/health', tags=['ops'])
     def health(svc: Services = Depends(services)):

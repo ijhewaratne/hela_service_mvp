@@ -106,23 +106,36 @@ def get_availability(user: UserPrincipal = Depends(provider), svc: Services = De
 
 
 # --- checks used by matching and acceptance -----------------------------------------------------------
+# Loaders take many providers at once; the rule itself (slack_from) is pure and shared by both paths.
 
-def schedule_slack_minutes(con: Connection, provider_id: str, start: datetime, end: datetime, tz: str) -> int | None:
-    """Minutes of weekly-slot margin around the window, or None if no single slot covers it or a blackout
-    overlaps. Windows that cross or end at local midnight are never covered (no overnight work in R1)."""
+def load_schedules(con: Connection, provider_ids: list[str], start: datetime, end: datetime,
+                   tz: str) -> dict[str, list[dict] | None]:
+    """Weekly slots on the job's local weekday per provider; None for a provider with an overlapping blackout."""
+    if not provider_ids:
+        return {}
+    weekday = start.astimezone(ZoneInfo(tz)).weekday()
+    out: dict[str, list[dict] | None] = {pid: [] for pid in provider_ids}
+    for r in many(con, '''SELECT provider_id, start_local, end_local FROM provider_weekly_availability
+                           WHERE provider_id = ANY(CAST(:ids AS uuid[])) AND weekday = :d''', ids=provider_ids, d=weekday):
+        out[str(r['provider_id'])].append(r)
+    for r in many(con, '''SELECT DISTINCT provider_id FROM provider_blackouts WHERE provider_id = ANY(CAST(:ids AS uuid[]))
+                           AND period && tstzrange(:s, :e, '[)')''', ids=provider_ids, s=start, e=end):
+        out[str(r['provider_id'])] = None
+    return out
+
+
+def slack_from(slots: list[dict] | None, start: datetime, end: datetime, tz: str) -> int | None:
+    """Minutes of weekly-slot margin around the window, or None if no single slot covers it (or a blackout
+    overlaps). Windows that cross or end at local midnight are never covered (no overnight work in R1)."""
     zone = ZoneInfo(tz)
     ls, le = start.astimezone(zone), end.astimezone(zone)
-    if ls.date() != le.date():
-        return None
-    if one(con, '''SELECT 1 AS hit FROM provider_blackouts WHERE provider_id = :p
-                   AND period && tstzrange(:s, :e, '[)') LIMIT 1''', p=provider_id, s=start, e=end):
+    if slots is None or ls.date() != le.date():
         return None
     best = None
-    for slot in many(con, '''SELECT start_local, end_local FROM provider_weekly_availability
-                             WHERE provider_id = :p AND weekday = :d''', p=provider_id, d=ls.weekday()):
+    day = datetime.combine(ls.date(), time(0), zone)
+    for slot in slots:
         if slot['start_local'] <= ls.time() and slot['end_local'] >= le.time():
-            day = datetime.combine(ls.date(), time(0), zone)
-            slack = ((ls - (day + _td(slot['start_local']))) + ((day + _td(slot['end_local'])) - le))
+            slack = (ls - (day + _td(slot['start_local']))) + ((day + _td(slot['end_local'])) - le)
             minutes = int(slack.total_seconds() // 60)
             best = minutes if best is None else max(best, minutes)
     return best
@@ -132,7 +145,11 @@ def _td(t: time) -> timedelta:
     return timedelta(hours=t.hour, minutes=t.minute, seconds=t.second)
 
 
-def has_overlap(con: Connection, provider_id: str, start: datetime, end: datetime, buffer_minutes: int) -> bool:
-    return one(con, '''SELECT 1 AS hit FROM booking_assignments WHERE provider_id = :p AND active
-                       AND busy && tstzrange(:s, :e, '[)') LIMIT 1''',
-               p=provider_id, s=start, e=end + timedelta(minutes=buffer_minutes)) is not None
+def busy_providers(con: Connection, provider_ids: list[str], start: datetime, end: datetime,
+                   buffer_minutes: int) -> set[str]:
+    """Providers holding a live assignment that overlaps [start, end + buffer)."""
+    if not provider_ids:
+        return set()
+    return {str(r['provider_id']) for r in many(con, '''SELECT DISTINCT provider_id FROM booking_assignments
+                WHERE provider_id = ANY(CAST(:ids AS uuid[])) AND active AND busy && tstzrange(:s, :e, '[)')''',
+                ids=provider_ids, s=start, e=end + timedelta(minutes=buffer_minutes))}

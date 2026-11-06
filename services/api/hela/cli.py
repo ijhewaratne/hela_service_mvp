@@ -129,9 +129,12 @@ def seed_synthetic(_args) -> int:
 
 
 def verify_audit(_args) -> int:
-    with tx(make_engine(get_settings().database_url)) as con:
+    engine = make_engine(get_settings().database_url)
+    with tx(engine) as con:
+        audit.seal(con)
+    with tx(engine) as con:
         bad = one(con, 'SELECT audit_verify_chain() AS bad')['bad']
-        n = one(con, 'SELECT count(*) AS n FROM audit_logs')['n']
+        n = one(con, 'SELECT count(*) AS n FROM audit_chain')['n']
     if bad is None:
         print(f'Audit chain intact ({n} rows).')
         return 0

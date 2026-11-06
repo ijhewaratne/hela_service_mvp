@@ -18,8 +18,8 @@ from ..core.config import Settings
 from ..core.db import many, one, run
 from ..core.jobs import enqueue
 from ..notifications.outbox import notify
-from ..verification.eligibility import provider_category_gaps
-from .availability import has_overlap, schedule_slack_minutes
+from ..verification.eligibility import category_context, gaps_from_facts, load_trust_facts
+from .availability import busy_providers, load_schedules, slack_from
 
 WEIGHTS = {'distance': 0.45, 'schedule_slack': 0.25, 'decline': 0.20, 'fairness': 0.10}
 COLD_START_OFFERS = 5
@@ -29,34 +29,61 @@ def distance_band(km: float) -> str:
     return '<2 km' if km < 2 else '2-5 km' if km < 5 else '5-10 km' if km < 10 else '10+ km'
 
 
-def _history(con: Connection, provider_id: str) -> tuple[float, int]:
+def _histories(con: Connection, provider_ids: list[str]) -> dict[str, tuple[float, int]]:
     """30-day decline rate (expired offers excluded: the provider may simply have been offline) and assignments."""
-    h = one(con, '''SELECT count(*) FILTER (WHERE status = 'declined') AS declined,
-                           count(*) FILTER (WHERE status = 'accepted') AS accepted
-                    FROM offers WHERE provider_id = :p AND created_at > now() - interval '30 days' ''', p=provider_id)
-    answered = h['declined'] + h['accepted']
-    decline = 0.5 if answered < COLD_START_OFFERS else h['declined'] / answered  # neutral cold start (Q45)
-    assigned = one(con, '''SELECT count(*) AS n FROM booking_assignments
-                           WHERE provider_id = :p AND started_at > now() - interval '30 days' ''', p=provider_id)['n']
-    return decline, assigned
+    if not provider_ids:
+        return {}
+    offers = {str(r['provider_id']): r for r in many(con, '''
+        SELECT provider_id, count(*) FILTER (WHERE status = 'declined') AS declined,
+               count(*) FILTER (WHERE status = 'accepted') AS accepted
+        FROM offers WHERE provider_id = ANY(CAST(:ids AS uuid[])) AND created_at > now() - interval '30 days'
+        GROUP BY provider_id''', ids=provider_ids)}
+    assigned = {str(r['provider_id']): r['n'] for r in many(con, '''
+        SELECT provider_id, count(*) AS n FROM booking_assignments
+        WHERE provider_id = ANY(CAST(:ids AS uuid[])) AND started_at > now() - interval '30 days' GROUP BY provider_id''',
+        ids=provider_ids)}
+    out = {}
+    for pid in provider_ids:
+        h = offers.get(pid, {'declined': 0, 'accepted': 0})
+        answered = h['declined'] + h['accepted']
+        decline = 0.5 if answered < COLD_START_OFFERS else h['declined'] / answered   # neutral cold start (Q45)
+        out[pid] = (decline, assigned.get(pid, 0))
+    return out
+
+
+def gate_providers(con: Connection, s: Settings, req: dict, candidates: list[dict]) -> dict[str, tuple[list[str], int | None]]:
+    """All mandatory checks (§8.1) for many providers with a fixed number of queries.
+    Each candidate needs provider_id, distance_km and radius_km (None when the provider has no service area)."""
+    pids = [str(c['provider_id']) for c in candidates]
+    ctx = category_context(con, req['category_code'])
+    trust = load_trust_facts(con, pids, req['category_code'])
+    schedules = load_schedules(con, pids, req['start_at'], req['end_at'], s.local_timezone)
+    busy = busy_providers(con, pids, req['start_at'], req['end_at'], s.travel_buffer_minutes)
+    now = datetime.now(UTC)
+    out = {}
+    for c in candidates:
+        pid = str(c['provider_id'])
+        reasons = gaps_from_facts(trust.get(pid), ctx, now)
+        if pid == str(req['customer_id']):
+            reasons.append('SELF_BOOKING')                       # Q12: never receive your own booking
+        if c['distance_km'] is None or c['radius_km'] is None:
+            reasons.append('NO_SERVICE_AREA')
+        elif c['distance_km'] > c['radius_km']:
+            reasons.append('OUTSIDE_SERVICE_AREA')
+        slack = slack_from(schedules.get(pid), req['start_at'], req['end_at'], s.local_timezone)
+        if slack is None:
+            reasons.append('UNAVAILABLE')
+        if pid in busy:
+            reasons.append('CONFLICTING_ASSIGNMENT')
+        out[pid] = (reasons, slack)
+    return out
 
 
 def hard_gates(con: Connection, s: Settings, req: dict, provider_id: str, *, distance_km: float | None,
                radius_km: float | None) -> tuple[list[str], int | None]:
-    """All mandatory checks for one provider and request (§8.1). Returns (reason codes, schedule slack)."""
-    reasons = list(provider_category_gaps(con, provider_id, req['category_code']))
-    if provider_id == str(req['customer_id']):
-        reasons.append('SELF_BOOKING')                       # Q12: never receive your own booking
-    if distance_km is None or radius_km is None:
-        reasons.append('NO_SERVICE_AREA')
-    elif distance_km > radius_km:
-        reasons.append('OUTSIDE_SERVICE_AREA')
-    slack = schedule_slack_minutes(con, provider_id, req['start_at'], req['end_at'], s.local_timezone)
-    if slack is None:
-        reasons.append('UNAVAILABLE')
-    if has_overlap(con, provider_id, req['start_at'], req['end_at'], s.travel_buffer_minutes):
-        reasons.append('CONFLICTING_ASSIGNMENT')
-    return reasons, slack
+    """Single-provider form used at acceptance; identical rules to matching."""
+    return gate_providers(con, s, req, [{'provider_id': provider_id, 'distance_km': distance_km,
+                                         'radius_km': radius_km}])[provider_id]
 
 
 def _candidates(con: Connection, req: dict) -> list[dict]:
@@ -76,21 +103,21 @@ def run_matching(con: Connection, s: Settings, req: dict) -> dict:
     already = {str(r['provider_id']) for r in many(con, 'SELECT provider_id FROM offers WHERE request_id = :r',
                                                    r=req['id'])}
     exclusions: Counter = Counter()
-    eligible = []
     candidates = _candidates(con, req)
-    for c in candidates:
+    fresh = [c for c in candidates if str(c['provider_id']) not in already]
+    exclusions['ALREADY_OFFERED'] += len(candidates) - len(fresh)
+    gates = gate_providers(con, s, req, fresh)
+    passing = [c for c in fresh if not gates[str(c['provider_id'])][0]]
+    for reasons, _ in gates.values():
+        for code in reasons:
+            exclusions[code.split(':')[0]] += 1   # non-sensitive codes only; no provider identities
+    history = _histories(con, [str(c['provider_id']) for c in passing])
+    eligible = []
+    for c in passing:
         pid = str(c['provider_id'])
-        if pid in already:
-            exclusions['ALREADY_OFFERED'] += 1
-            continue
-        reasons, slack = hard_gates(con, s, req, pid, distance_km=c['distance_km'], radius_km=c['radius_km'])
-        if reasons:
-            for code in reasons:
-                exclusions[code.split(':')[0]] += 1   # non-sensitive codes only; no provider identities
-            continue
-        decline, assigned = _history(con, pid)
+        decline, assigned = history[pid]
         eligible.append({'provider_id': pid, 'distance_km': round(c['distance_km'], 2), 'radius_km': c['radius_km'],
-                         'slack_minutes': slack, 'decline': decline, 'assigned_30d': assigned})
+                         'slack_minutes': gates[pid][1], 'decline': decline, 'assigned_30d': assigned})
     cohort_median = median([e['assigned_30d'] for e in eligible]) if eligible else 0
     for e in eligible:
         parts = {'distance': min(e['distance_km'] / max(e['radius_km'], 0.01), 1.0),
@@ -101,7 +128,8 @@ def run_matching(con: Connection, s: Settings, req: dict) -> dict:
         e['rank_cost'] = round(sum(WEIGHTS[k] * v for k, v in parts.items()), 5)
     # Deterministic tie-break on provider id (documented, FR-MAT-03).
     eligible.sort(key=lambda e: (e['rank_cost'], e['provider_id']))
-    return {'candidate_count': len(candidates), 'eligible': eligible, 'exclusions': dict(exclusions)}
+    return {'candidate_count': len(candidates), 'eligible': eligible,
+            'exclusions': {k: v for k, v in exclusions.items() if v}}
 
 
 def dispatch_round(con: Connection, s: Settings, request_id: str, *, actor: str = 'dispatcher') -> dict:

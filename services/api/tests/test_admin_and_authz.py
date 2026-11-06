@@ -157,8 +157,11 @@ def test_audit_chain_is_append_only_and_verifiable(client, make_admin, admin_log
     assert verify['intact'] and verify['rows_checked'] >= 3
 
     from conftest import APP_URL
+    assert verify['unsealed_rows'] == 0
     app_role = create_engine(APP_URL)
-    for stmt in ("UPDATE audit_logs SET action = 'x'", 'DELETE FROM audit_logs', 'TRUNCATE audit_logs'):
+    for stmt in ("UPDATE audit_logs SET action = 'x'", 'DELETE FROM audit_logs', 'TRUNCATE audit_logs',
+                 "INSERT INTO audit_chain(audit_id, prev_hash, row_hash) VALUES (1, 'x', 'y')",
+                 'DELETE FROM audit_chain'):
         with pytest.raises(DBAPIError):
             with app_role.begin() as con:
                 con.execute(text(stmt))
@@ -169,7 +172,7 @@ def test_audit_chain_is_append_only_and_verifiable(client, make_admin, admin_log
     db("UPDATE audit_logs SET details = '{\"forged\": true}' WHERE id = 2")
     db('ALTER TABLE audit_logs ENABLE TRIGGER audit_no_update')
     broken = client.get('/v1/admin/audit/verify', headers=bearer(tokens)).json()
-    assert broken == {'intact': False, 'first_inconsistent_id': 2, 'rows_checked': verify['rows_checked'] + 0}
+    assert broken['intact'] is False and broken['first_inconsistent_id'] == 2
 
 
 def test_audit_never_stores_secret_fields(client, login, db):
@@ -189,3 +192,13 @@ def test_totp_helper_rejects_malformed_codes():
     secret = pyotp.random_base32()
     assert matching_totp_step(secret, 'abcdef') is None
     assert matching_totp_step(secret, pyotp.TOTP(secret).now()) is not None
+
+
+def test_admin_session_idle_timeout(client, make_admin, admin_login, db):
+    _, clock = make_admin('ops.alice')
+    tokens = admin_login('ops.alice', clock)
+    assert client.get('/v1/admin/auth/me', headers=bearer(tokens)).status_code == 200
+    db("UPDATE sessions SET last_seen_at = now() - interval '31 minutes'")
+    r = client.get('/v1/admin/auth/me', headers=bearer(tokens))
+    assert r.status_code == 401 and r.json()['error']['code'] == 'SESSION_IDLE_TIMEOUT'
+    assert client.post('/v1/admin/auth/refresh', json={'refresh_token': tokens['refresh_token']}).status_code == 401
