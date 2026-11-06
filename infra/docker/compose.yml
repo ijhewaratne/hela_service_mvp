@@ -1,0 +1,38 @@
+# Local synthetic development only. Ports bind to 127.0.0.1; passwords are dev placeholders.
+name: hela-dev
+
+services:
+  postgres:
+    # The official image has no arm64 build; Apple Silicon runs it under amd64 emulation.
+    image: postgis/postgis:16-3.5
+    platform: linux/amd64
+    environment:
+      POSTGRES_USER: hela_owner
+      POSTGRES_PASSWORD: ${HELA_PG_OWNER_PASSWORD:-hela_owner_dev_only}
+      POSTGRES_DB: hela
+      HELA_PG_APP_PASSWORD: ${HELA_PG_APP_PASSWORD:-hela_app_dev_only}
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # TCP check: during first-time init the temporary server listens on a socket only.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U hela_owner -d hela"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  redis:
+    image: redis:7.4.1-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:

@@ -1,156 +1,75 @@
-# Hela Service — Synthetic Marketplace MVP (v0.2)
+# Hela Service
 
-**Independent engineering prototype for Hela Service / TRUST.**
+> **Synthetic local development only.** This code follows `Hela_Service_Master_System_Spec_v2.0` and the
+> working answers in `Hela_Service_Decision_Register.csv`, which are **not yet owner-approved**. Nothing here is
+> approved for real users, real personal data, payments or public deployment. Items marked `UNAPPROVED`
+> or `PENDING` are placeholders for decisions in spec §23 (DEC-01 to DEC-12).
 
-> **DANGER: LOCAL SYNTHETIC DEMO ONLY.** This project deliberately uses
-> `X-Demo-Actor` to impersonate fictional actors. It has **no real authentication**,
-> payment gateway, completed provider verification, operating safeguards, privacy controls,
-> or production-grade deployment configuration. Do not put it on a public server,
-> use real personal data, or provide access to real customers/providers.
+## Layout
 
-This code demonstrates the first *vertical slice* identified in `Hela_Service_PRD_v1.md`:
+| Path | What it is |
+|---|---|
+| `services/api/` | R1 FastAPI modular monolith (Python 3.12, PostgreSQL/PostGIS, Redis) |
+| `services/api/migrations/` | Alembic migrations (run as `hela_owner`; the API runs as least-privilege `hela_app`) |
+| `services/workers/` | Outbox/background workers (M03) |
+| `infra/docker/` | Docker Compose dev stack, bound to 127.0.0.1 |
+| `legacy/v0_2/` | The original SQLite prototype, frozen and still tested. Never run its demo auth in the new backend. |
+| `docs/` | Spec questions, PRD, earlier design notes |
+| `scripts/env_check.sh` | Checks Python 3.12, Docker and ports |
 
-1. A fictional household creates a 2-hour cleaning request.
-2. The backend filters providers by active status, approved category, unexpired
-   credentials, safeguards, service radius, free schedule, and absence of conflicting jobs.
-3. An admin dispatches time-limited offers to the two highest-ranked eligible providers.
-4. A provider accepts. A **single SQLite `BEGIN IMMEDIATE` write transaction** arbitrates
-   concurrent acceptances so only one booking is assigned in this **single-node demo**.
-5. The provider moves through the booking state machine; the customer confirms completion.
-6. Offline payment acknowledgements and append-only event/audit logs are recorded.
+## Milestone status
 
-This is an **independently designed Hela Service proof of concept**, not PickMe software or its private API.
+| Milestone | Status |
+|---|---|
+| M01 Data foundation: Postgres/PostGIS, migrations, identity, authorization, audit | **Done (this commit)** |
+| M02 Provider trust: onboarding, evidence storage, approvals, expiry | Next |
+| M03 Booking engine: catalogue, quotes, requests, matching, offers, bookings, settlement, incidents | Planned |
+| R2: Flutter customer/provider apps, React admin | After the R1 gate |
 
-## Requirements
-
-- Python 3.11 or newer
-- Internet only for first-time dependency installation (unless dependencies are cached)
-- Local machine; test with synthetic fixtures only
-
-## Run locally (macOS / Linux)
-
-```bash
-cd hela_service_mvp
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e '.[test]'
-export HELA_DEMO_MODE=1
-uvicorn hela.asgi:app --host 127.0.0.1 --port 8000
-```
-
-Navigate to [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
-The interactive API docs show the endpoints. For authenticated demo calls, add:
-`X-Demo-Actor: customer_asha` (or another synthetic actor) to the request headers.
-For booking creation, offer acceptance, and status transitions, add a unique
-`Idempotency-Key: any-long-unique-key-001` header.
-
-For Windows PowerShell use `.venv\\Scripts\\Activate.ps1` and `$env:HELA_DEMO_MODE='1'`
-before running `uvicorn ... --host 127.0.0.1`.
-
-**Full walkthrough, no server required:**
+## Run locally (macOS)
 
 ```bash
-python -m scripts.run_demo
+scripts/env_check.sh
+docker compose -f infra/docker/compose.yml up -d --wait
+cd services/api
+/opt/homebrew/bin/python3.12 -m venv .venv
+.venv/bin/pip install -e '.[test,dev]'
+.venv/bin/alembic upgrade head
+HELA_MIGRATION_DATABASE_URL=postgresql+psycopg://hela_owner:hela_owner_dev_only@127.0.0.1:55432/hela_test .venv/bin/alembic upgrade head
+.venv/bin/python -m hela.cli seed-synthetic
+.venv/bin/python -m hela.cli create-admin --username ops.alice --role super_admin --reason "Local dev bootstrap"
+HELA_ENV=dev HELA_DEV_INBOX_TOKEN=pick-a-local-token .venv/bin/uvicorn hela.asgi:app --host 127.0.0.1 --port 8000
 ```
 
-**Run automated tests:**
+`create-admin` prints a TOTP secret and `otpauth://` URI **once**. Add it to an authenticator app.
 
-```bash
-python -m pytest -q
-```
+API docs: http://127.0.0.1:8000/docs (dev/test only).
 
-## Fictional actors (not genuine identities)
+**Development OTP codes** go to a sandbox inbox, never to logs. Read the latest one with:
+`POST /v1/dev/sms-inbox/latest` with body `{"phone": "+9477..."}` and header `X-Dev-Inbox-Token`.
+This route exists only when `HELA_ENV=dev` and a token is set. Settings refuse it in staging and production.
 
-| Header `X-Demo-Actor` | Role | Purpose |
-|---|---|---|
-| `customer_asha` | customer | Owns `addr_asha` |
-| `customer_nimal` | customer | Owns `addr_nimal` |
-| `provider_alpha` | provider | Approved, available cleaning + errands |
-| `provider_beta` | provider | Approved, available cleaning + errands |
-| `provider_gamma` | provider | Approved, available cleaning + errands |
-| `provider_unverified` | provider | Unapproved: intentionally nearest, but excluded |
-| `provider_suspended` | provider | Suspended, always excluded |
-| `provider_expired` | provider | Expired category evidence, always excluded |
-| `provider_far` | provider | Outside service radius, always excluded |
-| `admin_ops` | admin | Dispatch, audit and category review |
+**Tests** (needs the Compose stack running): `cd services/api && .venv/bin/python -m pytest`
 
-All sample addresses are fabricated points near Kandy. They do not identify real households.
-All seeded service rates, e.g. LKR 1,200/hour for cleaning, are **test values**,
-not researched local market prices or an approved TRUST pricing decision.
+**Legacy prototype tests:** `cd legacy/v0_2 && HELA_DEMO_MODE=1 python -m pytest`
 
-## Basic API sequence
+## M01: what's implemented
 
-`POST /v1/requests` → admin `POST /v1/admin/requests/{id}/dispatch` →
-provider `GET /v1/offers/me` → `POST /v1/offers/{id}/accept` →
-`POST /v1/bookings/{id}/transitions` → customer offline payment report →
-provider offline payment acknowledgement → customer completion.
+- **Customer/provider sign-in (FR-ID-01/03/07):** phone OTP with hashed, single-use, 5-minute codes bound to the phone. 5 attempts per code, 3 sends per phone per 15 minutes, and a per-IP limit in Redis. If Redis is down, the rate limiter refuses requests (fails closed). The same response is returned whether or not the number has an account.
+- **Sessions (Q9):** 10-minute JWTs, checked for issuer and audience, plus a server-side session check on every request. Refresh tokens are opaque, stored hashed and rotated on each use. Replaying an already-used refresh token revokes the whole session. Users can log out, log out everywhere, and list or end sessions.
+- **Admins (Q10–Q15):** a separate admin identity with an argon2id password, then TOTP. Used TOTP codes cannot be reused. Accounts lock after 5 failed passwords. No admin session can open without TOTP enrolment.
+- **Permissions (Q11):** deny by default, with roles mapping to permissions and optional region scoping.
+- **Step-up (Q14):** sensitive actions need a fresh TOTP check, valid for 5 minutes and only for the named action.
+- **Maker/checker (Q15):** enabling or disabling a region needs one admin to propose and a different admin to approve. The database also blocks self-approval. Staging and production refuse to enable a region that isn't marked approved.
+- **Data protection (Q65):** phone numbers are AES-256-GCM encrypted, with keyed hashes for lookups. Only the last 3 digits are ever returned. Audit records drop secret fields automatically.
+- **Audit (Q64):** the database computes a hash chain over the audit log and blocks UPDATE, DELETE and TRUNCATE. `GET /v1/admin/audit/verify` and `python -m hela.cli verify-audit` detect tampering.
+- **Errors (Q62):** every error uses the spec §13.1 envelope with a `message_key` and correlation ID. Submitted values are never echoed back.
+- **Notices (FR-ID-05):** versioned notices per language. Each acceptance records the version, language and processing context.
+- **Localisation (Q61):** `si`/`ta`/`en` preference, with English as the reviewed source. `si` and `ta` are marked untranslated.
 
-The request body uses an owned address ID, enabled category, task details and two
-ISO8601 datetimes with explicit timezone offsets. The demo accepts bookings
-between 5 minutes and 60 days in the future, up to 8 hours long.
+### Known gaps (tracked for M02/M03)
 
-## Key engineering choices
-
-- **Hard eligibility gates before scoring.** The nearest unverified provider cannot win.
-- **Revalidate at acceptance.** Expired/revoked approvals and competing assignments block acceptance.
-- **Deterministic ranking.** Uses straight-line distance as a *proxy*, slot slack,
-  synthetic decline rate and synthetic workload penalty; it does **not** claim a
-  driving ETA or PickMe's actual matching formula.
-- **Single-winner assignment.** Database uniqueness + serialized SQLite writers protect
-  this local prototype. Production requires PostgreSQL transaction/locking design,
-  exclusion constraints and race/load testing.
-- **Request idempotency.** Same customer + key + body returns the same request;
-  altered body with same key produces HTTP 409.
-- **Booking transition idempotency.** Same actor + booking + key + payload returns
-  the saved transition response; altered payload with the same key produces HTTP 409.
-- **Event trail and RBAC.** Active synthetic role gate, owner checks, immutable-by-API
-  booking events and admin event logging. Not full production authentication/audit tamper protection.
-- **No funds collected.** Customer-reported offline payment followed by provider
-  acknowledgement. Commission is zero until a real policy is approved.
-- **High-risk services disabled.** Elder companionship, child supervision and clinical
-  care are *not* enabled in this prototype.
-
-## Implemented API subset
-
-`/health`, `/v1/categories`, `/v1/addresses/me`, `/v1/requests`,
-`/v1/requests/{id}`, `/v1/admin/requests/{id}/dispatch`, `/v1/offers/me`,
-`/v1/offers/{id}/accept`, `/v1/offers/{id}/decline`, `/v1/bookings/{id}`,
-`/v1/bookings/{id}/events`, `/v1/bookings/{id}/transitions`,
-`/v1/bookings/{id}/settlement`, the two settlement acknowledgement routes,
-`/v1/bookings/{id}/incidents`, admin category approval, audit and matching logs.
-
-`generated_openapi.json` contains the routes generated from **this running code**.
-The prior pack's `openapi.yaml` is a **future contract proposal**, not an exact match.
-
-## What is NOT built and why
-
-**Not operational:** customer/driver mobile apps, Sinhala/Tamil/English interface,
-consent and beneficiary delegation, real identity verification, provider documents,
-background/reference verification, live GPS, road routing, notifications, persistent
-provider availability management, real payments, refunds, human safeguarding case
-workflow, monitoring, fraud controls, enterprise audit retention and legal signoff.
-
-**Production engineering prerequisites:** OAuth/OIDC or validated OTP + session security;
-MFA and independent admin role controls; secure document storage; data minimization,
-privacy notices/consent; encryption and secrets management; rate limiting;
-PostgreSQL/PostGIS + carefully reviewed transaction semantics; provider overlap
-constraints; real credential-validity policy; an incident escalation owner;
-commission/contract/insurance design; observability, backups, recovery tests and
-independent security assessment. **No live users until these are addressed.**
-
-## Repository layout
-
-```text
-hela/                 FastAPI implementation, matching, schema and synthetic fixtures
-scripts/run_demo.py   Full end-to-end simulation without running a server
-tests/                Automated safety, ownership, concurrency and workflow tests
-.github/workflows/    Ready-to-copy test workflow (not uploaded to GitHub)
-ENGINEERING_NOTES.md  Current vs planned scope, production gates and next build tasks
-generated_openapi.json  API specification emitted from FastAPI
-```
-
-## Ownership and operations
-
-TRUST's social-purpose programs, donations, beneficiaries and commercial Hela Service
-bookings must retain separate ledgers and appropriate governance. The legal entity,
-brand, data controller roles and pilot location have not yet been finalized in code.
+- No real SMS vendor (DEC-08). Outside dev, the app refuses to pretend an SMS was sent.
+- Keys come from environment variables (`EnvKeyProvider`). A managed KMS provider is needed before staging.
+- Admin TOTP recovery is an operator procedure only, with no self-service yet.
+- Category policies, provider evidence, bookings, outbox and notifications are not built yet.

@@ -1,0 +1,76 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  legacy-v0_2:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: legacy/v0_2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install fastapi uvicorn pydantic httpx pytest
+      - run: HELA_DEMO_MODE=1 python -m pytest -q
+
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:16-3.5
+        env:
+          POSTGRES_USER: hela_owner
+          POSTGRES_PASSWORD: hela_owner_dev_only
+          POSTGRES_DB: hela
+        ports: ['55432:5432']
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U hela_owner -d hela" --health-interval 3s --health-timeout 3s --health-retries 40
+      redis:
+        image: redis:7.4.1-alpine
+        ports: ['56379:6379']
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Create runtime role and test database (mirrors infra/docker/postgres-init)
+        env:
+          PGPASSWORD: hela_owner_dev_only
+          HELA_PG_APP_PASSWORD: hela_app_dev_only
+          POSTGRES_USER: hela_owner
+          POSTGRES_DB: hela
+        run: |
+          sudo apt-get install -y -q postgresql-client >/dev/null
+          export PGHOST=127.0.0.1 PGPORT=55432
+          bash ../../infra/docker/postgres-init/01-roles-and-databases.sh
+      - run: python -m pip install -e '.[test,dev]'
+      - run: ruff check hela migrations tests
+      - run: python -m pytest
+      - name: Dependency vulnerability scan
+        run: pip-audit --skip-editable
+      - name: SBOM (CycloneDX)
+        run: cyclonedx-py environment -o sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: services/api/sbom.cdx.json
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
