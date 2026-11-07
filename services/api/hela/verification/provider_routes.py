@@ -8,13 +8,14 @@ from datetime import UTC, date, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from ..audit import service as audit
 from ..authz.deps import UserPrincipal, current_user
 from ..core import ratelimit
 from ..core.db import many, one, run, tx
 from ..core.errors import ApiError
+from ..core.schema import Input
 from ..core.services import Services, services
 from ..evidence.scanning import validate_upload
 from .eligibility import active_policy
@@ -24,12 +25,12 @@ router = APIRouter(prefix='/v1/provider', tags=['provider'])
 EvidenceType = Literal['national_id', 'address_proof', 'reference', 'training_record', 'police_clearance', 'other']
 
 
-class ApplyIn(BaseModel):
+class ApplyIn(Input):
     legal_name: str = Field(min_length=2, max_length=120)
     date_of_birth: date
 
 
-class CategoryRequestIn(BaseModel):
+class CategoryRequestIn(Input):
     category_code: str = Field(pattern=r'^[a-z0-9_]{3,40}$')
 
 

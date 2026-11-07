@@ -12,7 +12,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
 from sqlalchemy import Connection
 
 from ..audit import service as audit
@@ -22,6 +22,7 @@ from ..core.config import Settings
 from ..core.db import many, one, run, tx
 from ..core.errors import ApiError
 from ..core.jobs import enqueue
+from ..core.schema import Input
 from ..core.services import Services, services
 from ..customers.routes import customer
 from ..notifications.outbox import notify
@@ -31,7 +32,7 @@ from ..verification.eligibility import active_policy
 router = APIRouter(prefix='/v1', tags=['requests'])
 
 
-class QuoteIn(BaseModel):
+class QuoteIn(Input):
     category_code: str = Field(pattern=r'^[a-z0-9_]{3,40}$')
     address_id: UUID
     start_at: datetime
@@ -45,23 +46,23 @@ class QuoteIn(BaseModel):
         return v
 
 
-class QuoteAcceptIn(BaseModel):
+class QuoteAcceptIn(Input):
     policy_version: int = Field(ge=1)   # the terms version the customer saw
 
 
-class RequestIn(BaseModel):
+class RequestIn(Input):
     quote_id: UUID
     task_codes: list[str] = Field(min_length=1, max_length=20)
     task_note: str | None = Field(default=None, max_length=500)
     beneficiary_id: UUID | None = None
 
 
-class ConsentResponseIn(BaseModel):
+class ConsentResponseIn(Input):
     code: str = Field(pattern=r'^[0-9]{6}$')
     decision: Literal['confirm', 'decline']
 
 
-class CancelIn(BaseModel):
+class CancelIn(Input):
     reason: str = Field(min_length=3, max_length=300)
 
 

@@ -11,13 +11,14 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
+from pydantic import Field
 from sqlalchemy import Connection
 
 from ..audit import service as audit
 from ..authz.deps import AdminPrincipal, UserPrincipal, current_admin, current_user, require_permission
 from ..core.db import many, one, run, tx
 from ..core.errors import ApiError
+from ..core.schema import Input
 from ..core.services import Services, services
 
 router = APIRouter(prefix='/v1', tags=['safety'])
@@ -38,7 +39,7 @@ GUIDANCE = {
 }
 
 
-class IncidentIn(BaseModel):
+class IncidentIn(Input):
     booking_id: UUID | None = None
     kind: Literal['safety', 'property_damage', 'harassment', 'service_mismatch', 'emergency', 'payment_dispute',
                   'no_entry', 'other']
@@ -46,19 +47,19 @@ class IncidentIn(BaseModel):
     description: str = Field(min_length=10, max_length=3000)
 
 
-class IncidentActionIn(BaseModel):
+class IncidentActionIn(Input):
     action: Literal['acknowledge', 'assign_to_me', 'note', 'start_investigation', 'place_booking_on_hold',
                     'resolve', 'close']
     note: str = Field(min_length=5, max_length=2000)
     booking_version: int | None = Field(default=None, ge=1)
 
 
-class ReviewIn(BaseModel):
+class ReviewIn(Input):
     rating: int = Field(ge=1, le=5)
     text: str | None = Field(default=None, max_length=1000)
 
 
-class ModerateIn(BaseModel):
+class ModerateIn(Input):
     decision: Literal['approve', 'reject']
     reason: str = Field(min_length=5, max_length=300)
 

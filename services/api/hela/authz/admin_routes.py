@@ -4,24 +4,25 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from ..audit import service as audit
 from ..core.db import many, one, tx
 from ..core.errors import ApiError
+from ..core.schema import Input
 from ..core.services import Services, services
 from .deps import AdminPrincipal, require_permission, require_step_up
 
 router = APIRouter(prefix='/v1/admin', tags=['admin-access'])
 
 
-class RoleGrantIn(BaseModel):
+class RoleGrantIn(Input):
     role_code: str = Field(pattern=r'^[a-z_]{3,40}$')
     region_id: UUID | None = None
     reason: str = Field(min_length=5, max_length=500)
 
 
-class RoleRevokeIn(BaseModel):
+class RoleRevokeIn(Input):
     reason: str = Field(min_length=5, max_length=500)
 
 

@@ -9,7 +9,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header
-from pydantic import BaseModel, Field
+from pydantic import Field
 from sqlalchemy import Connection
 from sqlalchemy.exc import IntegrityError
 
@@ -19,6 +19,7 @@ from ..core import idempotency
 from ..core.db import many, one, run, tx
 from ..core.errors import ApiError
 from ..core.jobs import enqueue
+from ..core.schema import Input
 from ..core.services import Services, services
 from ..notifications.outbox import notify
 from .availability import provider as provider_persona
@@ -56,7 +57,7 @@ TRANSITIONS: dict[tuple[str, str], set[str]] = {
 ADMIN_REASON_TARGETS = {'cancelled', 'cancelled_after_review', 'completed', 'incident_hold', 'disputed'}
 
 
-class TransitionIn(BaseModel):
+class TransitionIn(Input):
     target_status: Literal['en_route', 'arrived', 'in_progress', 'completed_pending_confirmation', 'completed',
                            'disputed', 'cancelled', 'incident_hold', 'cancelled_after_review']
     expected_version: int = Field(ge=1)

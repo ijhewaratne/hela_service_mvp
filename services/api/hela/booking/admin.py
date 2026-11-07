@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import Field
 from sqlalchemy import Connection
 
 from ..audit import service as audit
@@ -14,6 +14,7 @@ from ..authz.deps import AdminPrincipal, current_admin, require_step_up
 from ..core.db import many, one, run, tx
 from ..core.errors import ApiError
 from ..core.jobs import enqueue
+from ..core.schema import Input
 from ..core.services import Services, services
 from ..notifications.outbox import notify
 from .bookings import TransitionIn, apply_transition, booking_context, booking_event
@@ -22,7 +23,7 @@ from .requests import decide_consent, set_request_status
 router = APIRouter(prefix='/v1/admin', tags=['admin-operations'])
 
 
-class Reason(BaseModel):
+class Reason(Input):
     reason: str = Field(min_length=5, max_length=500)
 
 

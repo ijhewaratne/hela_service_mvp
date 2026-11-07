@@ -11,6 +11,7 @@ from .authz.admin_routes import router as access_router
 from .booking import admin as booking_admin
 from .booking import availability, bookings, settlement
 from .booking import requests as booking_requests
+from .catalog import policies as catalog_policies
 from .catalog.regions import admin_router as region_admin_router
 from .catalog.regions import public as region_public_router
 from .core import errors
@@ -74,7 +75,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     for router in (identity_routes.router, admin_routes.router, access_router, region_public_router,
                    region_admin_router, audit_router, provider_routes.router, verification_admin_routes.router,
                    customer_routes.router, availability.router, booking_requests.router, bookings.router,
-                   settlement.router, incidents.router, booking_admin.router):
+                   settlement.router, incidents.router, booking_admin.router, catalog_policies.router):
         app.include_router(router)
     if settings.env == 'dev' and settings.dev_inbox_token:
         app.include_router(dev_inbox.router)

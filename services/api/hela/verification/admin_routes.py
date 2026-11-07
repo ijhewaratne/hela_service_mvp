@@ -9,12 +9,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from ..audit import service as audit
 from ..authz.deps import AdminPrincipal, current_admin, require_step_up
 from ..core.db import many, one, run, tx
 from ..core.errors import ApiError
+from ..core.schema import Input
 from ..core.services import Services, services
 from ..security.crypto import new_opaque_token, sha256_hex
 from .eligibility import active_policy, provider_category_gaps
@@ -36,11 +37,11 @@ def safety_actor(admin: AdminPrincipal = Depends(current_admin)) -> AdminPrincip
     return admin
 
 
-class Reason(BaseModel):
+class Reason(Input):
     reason: str = Field(min_length=5, max_length=1000)
 
 
-class Purpose(BaseModel):
+class Purpose(Input):
     purpose: str = Field(min_length=5, max_length=300)
 
 

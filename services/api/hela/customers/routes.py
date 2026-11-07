@@ -5,12 +5,13 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
 
 from ..audit import service as audit
 from ..authz.deps import UserPrincipal, current_user
 from ..core.db import many, one, run, tx
 from ..core.errors import ApiError
+from ..core.schema import Input
 from ..core.services import Services, services
 from ..identity.routes import normalize_phone
 
@@ -23,7 +24,7 @@ def coarse(value: float) -> float:
     return round(round(value / MATCH_GRID_DEGREES) * MATCH_GRID_DEGREES, 6)
 
 
-class AddressIn(BaseModel):
+class AddressIn(Input):
     label: str = Field(min_length=1, max_length=40)
     address_text: str = Field(min_length=5, max_length=300)
     lat: float = Field(ge=5.5, le=10.0)    # Sri Lanka bounding box; region check follows
@@ -38,7 +39,7 @@ class AddressIn(BaseModel):
         return v
 
 
-class BeneficiaryIn(BaseModel):
+class BeneficiaryIn(Input):
     name: str = Field(min_length=2, max_length=80)
     phone: str = Field(min_length=8, max_length=24)
     relationship: str = Field(min_length=2, max_length=40)

@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from ..core.db import one, tx
 from ..core.errors import ApiError
+from ..core.schema import Input
 from ..core.services import Services, services
 from ..security.crypto import constant_time_equal
 from .routes import normalize_phone
@@ -13,7 +14,7 @@ from .routes import normalize_phone
 router = APIRouter(prefix='/v1/dev', tags=['dev-only'], include_in_schema=False)
 
 
-class InboxQuery(BaseModel):
+class InboxQuery(Input):
     phone: str = Field(min_length=8, max_length=24)
 
 

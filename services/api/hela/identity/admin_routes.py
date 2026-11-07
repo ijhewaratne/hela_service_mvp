@@ -5,13 +5,14 @@ from datetime import timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from ..audit import service as audit
 from ..authz.deps import AdminPrincipal, client_ip, current_admin
 from ..core import ratelimit
 from ..core.db import one, run, tx
 from ..core.errors import ApiError
+from ..core.schema import Input
 from ..core.services import Services, services
 from ..security.crypto import new_opaque_token, sha256_hex
 from ..security.passwords import matching_totp_step, verify_password
@@ -24,23 +25,23 @@ StepUpAction = Literal['phone.change', 'evidence.read', 'role.grant', 'policy.ch
 MFA_MAX_ATTEMPTS = 5
 
 
-class AdminLoginIn(BaseModel):
+class AdminLoginIn(Input):
     username: str = Field(min_length=3, max_length=40)
     password: str = Field(min_length=1, max_length=256)
 
 
-class MfaIn(BaseModel):
+class MfaIn(Input):
     mfa_token: str = Field(min_length=20, max_length=200)
     totp: str = Field(pattern=r'^[0-9]{6}$')
     device_label: str | None = Field(default=None, max_length=60)
 
 
-class StepUpIn(BaseModel):
+class StepUpIn(Input):
     action: StepUpAction
     totp: str = Field(pattern=r'^[0-9]{6}$')
 
 
-class RefreshIn(BaseModel):
+class RefreshIn(Input):
     refresh_token: str = Field(min_length=20, max_length=200)
 
 

@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { Badge, ErrorBanner, Notice, ReasonAction, Section, Table, useLoad } from '../components/ui';
@@ -29,7 +30,9 @@ export function Controls() {
       <ErrorBanner error={regions.error || categories.error || changes.error} />
       <Section title="Pending changes">
         <Table rows={changes.data?.filter((c) => c.status === 'pending')} empty="No pending changes." columns={[
-          { key: 'change_type', label: 'Change' }, { key: 'justification', label: 'Justification' },
+          { key: 'change_type', label: 'Change' },
+          { key: 'target_id', label: 'Target', render: (c) => <code>{String(c.target_id).slice(0, 8)}</code> },
+          { key: 'justification', label: 'Justification' },
           { key: 'requested_at', label: 'Requested' },
           { key: 'decide', label: '', render: (c) => c.requested_by === me?.id
             ? <span className="muted">You proposed this; another administrator must decide.</span>
@@ -49,7 +52,9 @@ export function Controls() {
       </Section>
       <Section title="Categories">
         <Table rows={categories.data} columns={[
-          { key: 'display_name', label: 'Category' }, { key: 'risk_class', label: 'Class' },
+          { key: 'display_name', label: 'Category', render: (r) => ['disabled', 'out_of_scope'].includes(String(r.risk_class))
+            ? String(r.display_name) : <Link to={`/controls/${r.code}`}>{String(r.display_name)}</Link> },
+          { key: 'risk_class', label: 'Class' },
           { key: 'status', label: 'Status', render: (r) => <Badge value={String(r.status)} /> },
           { key: 'active_policy_version', label: 'Policy v' },
           { key: 'policy_approval_status', label: 'Policy approval', render: (r) => <Badge value={String(r.policy_approval_status)} /> },

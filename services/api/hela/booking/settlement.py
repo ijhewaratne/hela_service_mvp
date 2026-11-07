@@ -9,13 +9,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import Field
 from sqlalchemy import Connection
 
 from ..audit import service as audit
 from ..authz.deps import AdminPrincipal, UserPrincipal, current_user, require_permission
 from ..core.db import many, one, run, tx
 from ..core.errors import ApiError
+from ..core.schema import Input
 from ..core.services import Services, services
 from ..notifications.outbox import notify
 from .bookings import booking_context, role_for
@@ -24,17 +25,17 @@ router = APIRouter(prefix='/v1', tags=['settlement'])
 PAYABLE = ('completed_pending_confirmation', 'completed', 'disputed')
 
 
-class PaymentReportIn(BaseModel):
+class PaymentReportIn(Input):
     reference: str | None = Field(default=None, max_length=60, pattern=r'^[A-Za-z0-9 ._/-]*$')
     note: str | None = Field(default=None, max_length=300)
 
 
-class PaymentAckIn(BaseModel):
+class PaymentAckIn(Input):
     received: bool
     note: str | None = Field(default=None, max_length=300)
 
 
-class ResolveIn(BaseModel):
+class ResolveIn(Input):
     resolution: Literal['paid', 'unpaid']
     evidence_note: str = Field(min_length=10, max_length=1000)
 

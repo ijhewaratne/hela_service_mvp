@@ -6,25 +6,26 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
 from sqlalchemy import Connection
 
 from ..audit import service as audit
 from ..authz.deps import UserPrincipal, current_user
 from ..core.db import many, one, run, tx
+from ..core.schema import Input
 from ..core.services import Services, services
 from ..customers.routes import coarse
 
 router = APIRouter(prefix='/v1/provider', tags=['provider-availability'])
 
 
-class ServiceAreaIn(BaseModel):
+class ServiceAreaIn(Input):
     lat: float = Field(ge=5.5, le=10.0)
     lon: float = Field(ge=79.4, le=82.0)
     radius_km: float = Field(gt=0, le=25)
 
 
-class Slot(BaseModel):
+class Slot(Input):
     weekday: int = Field(ge=0, le=6)
     start_local: time
     end_local: time
@@ -36,11 +37,11 @@ class Slot(BaseModel):
         return self
 
 
-class WeeklyIn(BaseModel):
+class WeeklyIn(Input):
     slots: list[Slot] = Field(max_length=28)
 
 
-class BlackoutIn(BaseModel):
+class BlackoutIn(Input):
     starts_at: datetime
     ends_at: datetime
 

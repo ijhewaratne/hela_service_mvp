@@ -221,3 +221,11 @@ def test_oversized_bodies_rejected_even_without_content_length(client):
             yield b'x' * 10_000
     r = client.post('/v1/auth/otp/request', content=chunks(), headers={'Content-Type': 'application/json'})
     assert r.status_code == 413
+
+
+def test_unknown_fields_are_rejected_not_ignored(client, login):
+    tokens = login()
+    r = client.patch('/v1/me', headers=bearer(tokens), json={'preferred_language': 'si', 'account_state': 'active'})
+    assert r.status_code == 422
+    assert {'field': 'account_state', 'type': 'extra_forbidden'} in r.json()['error']['details']['fields']
+    assert client.get('/v1/me', headers=bearer(tokens)).json()['preferred_language'] == 'en'   # nothing half-applied

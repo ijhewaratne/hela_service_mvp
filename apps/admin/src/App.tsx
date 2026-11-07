@@ -3,6 +3,7 @@ import { useAuth } from './auth/AuthContext';
 import { Admins } from './pages/Admins';
 import { Audit } from './pages/Audit';
 import { BookingInspector } from './pages/BookingInspector';
+import { CategoryPolicies } from './pages/CategoryPolicies';
 import { Controls } from './pages/Controls';
 import { Dashboard } from './pages/Dashboard';
 import { IncidentCase, Incidents } from './pages/Incidents';
@@ -56,6 +57,7 @@ export function App() {
           {can('finance.reconcile') && <Route path="/settlements" element={<Settlements />} />}
           {can('review.moderate') && <Route path="/reviews" element={<Reviews />} />}
           {can('policy.manage') && <Route path="/controls" element={<Controls />} />}
+          {can('policy.manage') && <Route path="/controls/:code" element={<CategoryPolicies />} />}
           {can('admin.manage') && <Route path="/admins" element={<Admins />} />}
           {can('audit.read') && <Route path="/audit" element={<Audit />} />}
           <Route path="/none" element={<p>Your account has no modules assigned. Ask a super-administrator.</p>} />

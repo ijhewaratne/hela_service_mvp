@@ -8,13 +8,14 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
 
 from ..audit import service as audit
 from ..authz.deps import UserPrincipal, client_ip, current_user
 from ..core import ratelimit
 from ..core.db import many, one, run, tx
 from ..core.errors import ApiError
+from ..core.schema import Input
 from ..core.services import Services, services
 from ..security.crypto import constant_time_equal
 from . import sessions
@@ -33,7 +34,7 @@ def normalize_phone(raw: str) -> str:
     return phone
 
 
-class OtpRequestIn(BaseModel):
+class OtpRequestIn(Input):
     phone: str = Field(min_length=8, max_length=24)
     purpose: Literal['login'] = 'login'
 
@@ -49,16 +50,16 @@ class OtpVerifyIn(OtpRequestIn):
     device_label: str | None = Field(default=None, max_length=60)
 
 
-class RefreshIn(BaseModel):
+class RefreshIn(Input):
     refresh_token: str = Field(min_length=20, max_length=200)
 
 
-class ProfilePatch(BaseModel):
+class ProfilePatch(Input):
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
     preferred_language: Literal['si', 'ta', 'en'] | None = None
 
 
-class NoticeAcceptIn(BaseModel):
+class NoticeAcceptIn(Input):
     processing_context: str = Field(min_length=3, max_length=80, pattern=r'^[a-z0-9_.:-]+$')
 
 

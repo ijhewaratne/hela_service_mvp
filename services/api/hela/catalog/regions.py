@@ -6,32 +6,34 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import Field
 from sqlalchemy import Connection
 
 from ..audit import service as audit
 from ..authz.deps import AdminPrincipal, require_permission, require_step_up
 from ..core.db import many, one, run, tx
 from ..core.errors import ApiError
+from ..core.schema import Input
 from ..core.services import Services, services
 
 public = APIRouter(prefix='/v1', tags=['catalog'])
 admin_router = APIRouter(prefix='/v1/admin', tags=['admin-policy'])
 
-ChangeType = Literal['region.enable', 'region.disable', 'category.enable', 'category.disable']
+ChangeType = Literal['region.enable', 'region.disable', 'category.enable', 'category.disable', 'policy.publish',
+                     'price.publish']
 
 
-class RegionChangeIn(BaseModel):
+class RegionChangeIn(Input):
     change_type: Literal['region.enable', 'region.disable']
     justification: str = Field(min_length=10, max_length=1000)
 
 
-class CategoryChangeIn(BaseModel):
+class CategoryChangeIn(Input):
     change_type: Literal['category.enable', 'category.disable']
     justification: str = Field(min_length=10, max_length=1000)
 
 
-class DecisionIn(BaseModel):
+class DecisionIn(Input):
     decision: Literal['approve', 'reject']
     reason: str = Field(min_length=5, max_length=1000)
 
@@ -186,7 +188,11 @@ def decide_change(request_id: UUID, body: DecisionIn,
         if str(cr['requested_by']) == admin.admin_id:
             raise ApiError(403, 'SELF_APPROVAL_FORBIDDEN', 'authz.permission_denied')
         if body.decision == 'approve':
-            (_apply_region if is_region else _apply_category)(con, svc, cr)
+            if cr['change_type'].endswith('.publish'):
+                from .policies import apply_publish
+                apply_publish(con, cr)
+            else:
+                (_apply_region if is_region else _apply_category)(con, svc, cr)
         status = 'approved' if body.decision == 'approve' else 'rejected'
         run(con, '''UPDATE policy_change_requests SET status = :s, decided_by = :by, decided_at = now(),
                     decision_reason = :r WHERE id = :id''', s=status, by=admin.admin_id, r=body.reason, id=request_id)
