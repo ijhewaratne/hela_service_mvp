@@ -109,6 +109,11 @@ class ProfileScreen extends StatelessWidget {
               onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => AvailabilityScreen(api: api, showMap: showMaps))),
             ),
             ListTile(
+              leading: const Icon(Icons.privacy_tip_outlined),
+              title: const Text('My data and privacy'),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MyDataScreen(api: api))),
+            ),
+            ListTile(
               leading: const Icon(Icons.support_agent),
               title: const Text('Report a problem'),
               onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ReportProblemScreen(api: api))),
@@ -140,6 +145,7 @@ class _UploadEvidenceButtonState extends State<UploadEvidenceButton> {
   Widget build(BuildContext context) {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       DropdownButtonFormField<String>(
+        isExpanded: true,  // long labels ellipsise instead of overflowing narrow phones
         initialValue: _type,
         decoration: const InputDecoration(labelText: 'Document type'),
         items: _types.map((t) => DropdownMenuItem(value: t, child: Text(t.replaceAll('_', ' ')))).toList(),

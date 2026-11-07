@@ -346,6 +346,7 @@ class _ReportProblemScreenState extends State<ReportProblemScreen> {
           InfoBanner('${s.t('support.sent')} ${s.t('common.ref')}: ${(_receipt!['id'] as String).substring(0, 8)}')
         else ...[
           DropdownButtonFormField<String>(
+            isExpanded: true,  // long labels ellipsise instead of overflowing narrow phones
             initialValue: _kind,
             decoration: InputDecoration(labelText: s.t('support.kind')),
             items: const ['safety', 'property_damage', 'harassment', 'service_mismatch', 'payment_dispute', 'no_entry', 'other']
@@ -354,6 +355,7 @@ class _ReportProblemScreenState extends State<ReportProblemScreen> {
             onChanged: (v) => setState(() => _kind = v!),
           ),
           DropdownButtonFormField<String>(
+            isExpanded: true,  // long labels ellipsise instead of overflowing narrow phones
             initialValue: _severity,
             decoration: InputDecoration(labelText: s.t('support.severity')),
             items: const ['low', 'medium', 'high', 'critical'].map((k) => DropdownMenuItem(value: k, child: Text(k))).toList(),

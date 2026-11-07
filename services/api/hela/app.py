@@ -25,6 +25,7 @@ from .evidence.storage import EvidenceSealer, S3ObjectStore
 from .identity import admin_routes, dev_inbox
 from .identity import routes as identity_routes
 from .identity.sms import SandboxInboxSender, UnconfiguredSender
+from .privacy import routes as privacy_routes
 from .safety import incidents
 from .security.crypto import EnvKeyProvider, FieldCipher
 from .verification import admin_routes as verification_admin_routes
@@ -75,7 +76,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     for router in (identity_routes.router, admin_routes.router, access_router, region_public_router,
                    region_admin_router, audit_router, provider_routes.router, verification_admin_routes.router,
                    customer_routes.router, availability.router, booking_requests.router, bookings.router,
-                   settlement.router, incidents.router, booking_admin.router, catalog_policies.router):
+                   settlement.router, incidents.router, booking_admin.router, catalog_policies.router,
+                   privacy_routes.router):
         app.include_router(router)
     if settings.env == 'dev' and settings.dev_inbox_token:
         app.include_router(dev_inbox.router)

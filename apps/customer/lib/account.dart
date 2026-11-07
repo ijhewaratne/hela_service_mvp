@@ -43,6 +43,11 @@ class AccountScreen extends StatelessWidget {
         onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => NotificationsScreen(api: api))),
       ),
       ListTile(
+        leading: const Icon(Icons.privacy_tip_outlined),
+        title: const Text('My data and privacy'),
+        onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => MyDataScreen(api: api))),
+      ),
+      ListTile(
         leading: const Icon(Icons.support_agent),
         title: Text(s.t('support.title')),
         onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ReportProblemScreen(api: api))),

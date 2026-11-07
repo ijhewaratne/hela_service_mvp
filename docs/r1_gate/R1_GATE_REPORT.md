@@ -72,7 +72,7 @@ are a floor for engineering confidence, not a capacity claim; native Postgres on
 | AT-024 invalid file or virus upload | ✅ | `test_upload_validation`, `test_infected_upload_is_quarantined_not_stored`, `test_real_clamd_when_available` |
 | AT-025 repeated OTP guesses | ✅ | `test_wrong_code_counts_attempts_then_locks` (lockout plus audit record), `test_send_cap_per_phone` |
 | AT-026 restore from backup | ✅ (local) | `scripts/backup_restore_check.sh`: dump 1 s, restore 3 s, counts and schema identical, chain intact. Production needs WAL/PITR for RPO ≤ 15 min |
-| AT-027 admin alters policy | 🟡 | Region and category activation: maker/checker, step-up, audit (`test_category_maker_checker_and_gated_rules`). New *policy versions* can only be created by the operator CLI or SQL; an admin API with maker/checker is still to be built |
+| AT-027 admin alters policy | ✅ | Region and category activation, and new **policy and price versions**, all go through maker/checker with step-up and audit (`test_publish_policy_version_with_maker_checker`, `test_price_publish_changes_new_quotes_only`). Marking a policy APPROVED stays owner-only because it records an external sign-off |
 | AT-028 expired session | ✅ | `test_forged_expired_and_wrong_audience_tokens_rejected`, `test_admin_session_idle_timeout` |
 | AT-029 unsupported locality | ✅ | `test_unsupported_locality_is_refused` |
 | AT-030 TRUST/CLG account queries commercial users | ➖ | No TRUST/CLG role or access path exists. Keep it that way until a lawful data-sharing agreement exists (§1.3) |
@@ -125,8 +125,8 @@ findings fixed during R1 (F-1 to F-7), and the open items. **Not an independent 
 
 1. **CI has never run on GitHub**, because there's no remote yet (Q7). The workflow exists, with PostGIS, MinIO, lint, tests, pip-audit, SBOM and gitleaks.
 2. **KMS-backed keys and rotation**; asymmetric JWT signing (V11).
-3. **Policy-version administration API** with maker/checker (AT-027 partial).
-4. **Retention and deletion jobs** and the **privacy-request workflow** (DEC-09, Q63, Q66).
+3. ~~Policy-version administration API~~: done (migration 0006).
+4. **Retention periods and deletion** still need DEC-09. The register, legal holds (released only by a second person), the privacy-request workflow and the scoped own-data export are now built (migration 0007). The register is report-only, so nothing is deleted automatically.
 5. **WAL/PITR backups** in the target environment; the restore drill there (NFR-06).
 6. **Central logging and alerting** (§17), and an off-site write-once (WORM) audit export (Q64).
 7. **Independent security assessment** (NFR-07, §19.1).

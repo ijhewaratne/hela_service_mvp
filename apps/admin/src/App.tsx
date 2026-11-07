@@ -8,6 +8,7 @@ import { Controls } from './pages/Controls';
 import { Dashboard } from './pages/Dashboard';
 import { IncidentCase, Incidents } from './pages/Incidents';
 import { Login } from './pages/Login';
+import { Privacy } from './pages/Privacy';
 import { ProviderCase } from './pages/ProviderCase';
 import { RequestInspector } from './pages/RequestInspector';
 import { Reviews } from './pages/Reviews';
@@ -23,6 +24,7 @@ const MODULES = [
   { path: '/reviews', label: 'Reviews', perm: 'review.moderate' },
   { path: '/controls', label: 'Regions & categories', perm: 'policy.manage' },
   { path: '/admins', label: 'Administrators', perm: 'admin.manage' },
+  { path: '/privacy', label: 'Privacy', perm: 'privacy.handle' },
   { path: '/audit', label: 'Audit', perm: 'audit.read' },
 ];
 
@@ -59,6 +61,7 @@ export function App() {
           {can('policy.manage') && <Route path="/controls" element={<Controls />} />}
           {can('policy.manage') && <Route path="/controls/:code" element={<CategoryPolicies />} />}
           {can('admin.manage') && <Route path="/admins" element={<Admins />} />}
+          {can('privacy.handle') && <Route path="/privacy" element={<Privacy />} />}
           {can('audit.read') && <Route path="/audit" element={<Audit />} />}
           <Route path="/none" element={<p>Your account has no modules assigned. Ask a super-administrator.</p>} />
           <Route path="*" element={<Navigate to={home} replace />} />

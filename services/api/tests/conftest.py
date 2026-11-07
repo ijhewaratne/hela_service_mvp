@@ -27,6 +27,7 @@ ADMIN_PASSWORD = 'synthetic-admin-password-0001'
 
 # Reference data seeded by the migration survives resets.
 _KEEP = {'permissions', 'admin_roles', 'admin_role_permissions', 'audit_logs', 'audit_chain', 'alembic_version',
+         'retention_policies',
          'spatial_ref_sys'}
 
 
@@ -68,6 +69,7 @@ def reset(owner_engine, settings):
             "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))]
         wipe = [t for t in tables if t not in _KEEP]
         con.execute(text(f'TRUNCATE {", ".join(wipe)} RESTART IDENTITY CASCADE'))
+        con.execute(text("UPDATE retention_policies SET retention_days = NULL, approval_status = 'UNAPPROVED'"))
         # Test-only: the owner may bypass the append-only trigger to start each test with an empty chain.
         con.execute(text('ALTER TABLE audit_logs DISABLE TRIGGER audit_no_truncate'))
         con.execute(text('ALTER TABLE audit_chain DISABLE TRIGGER audit_chain_no_truncate'))

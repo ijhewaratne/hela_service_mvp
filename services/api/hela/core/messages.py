@@ -10,6 +10,8 @@ EN: dict[str, str] = {
     'auth.account_inactive': 'This account is not active. Contact support.',
     'auth.session_idle': 'You were signed out after a period of inactivity.',
     'error.payload_too_large': 'The request is too large.',
+    'privacy.recent_sign_in': 'For your security, sign in again before downloading your data.',
+    'privacy.legal_hold': 'A legal hold prevents this action until it is reviewed and released.',
     'auth.otp_sent': 'If this number can receive messages, a code has been sent.',
     'auth.otp_invalid': 'The code is incorrect or has expired.',
     'auth.otp_locked': 'Too many attempts. Request a new code.',
