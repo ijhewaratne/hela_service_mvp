@@ -94,6 +94,24 @@ jobs:
       - run: pnpm build
       - run: pnpm audit   # dev toolchain too: the dev server is network-exposed while running
 
+  mobile:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [hela_core, customer, provider]
+    defaults:
+      run:
+        working-directory: apps/${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
   secrets:
     runs-on: ubuntu-latest
     steps:

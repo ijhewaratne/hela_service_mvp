@@ -1,0 +1,158 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:hela_core/hela_core.dart';
+import 'package:hela_provider/main.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+
+class FakeBackend {
+  bool hasProfile = true;
+  bool dropFirstAccept = false;
+  final acceptKeys = <String?>[];
+  final transitions = <Map<String, dynamic>>[];
+  String status = 'accepted';
+  int version = 1;
+  Map<String, dynamic>? applied;
+
+  http.Response _j(Object body, [int code = 200]) => http.Response(jsonEncode(body), code, headers: {'content-type': 'application/json'});
+  http.Response _err(String code, int status) => _j({'error': {'code': code, 'message_key': 'k', 'message': code, 'correlation_id': 'c',
+        'retryable': false, 'details': {}}}, status);
+
+  Future<http.Response> handle(http.Request req) async {
+    final key = '${req.method} ${req.url.path}';
+    switch (key) {
+      case 'POST /v1/auth/otp/request':
+        return _j({'challenge_id': 'c1'}, 202);
+      case 'POST /v1/auth/otp/verify':
+        return _j({'access_token': 'A', 'refresh_token': 'R', 'session_id': 's'});
+      case 'PATCH /v1/me':
+        return _j({});
+      case 'GET /v1/notices/current':
+        return _j([]);
+      case 'GET /v1/provider/me':
+        return hasProfile
+            ? _j({'provider_id': 'p1', 'application_state': 'approved', 'account_state': 'active', 'identity_verified': true,
+                'age_verified': true, 'evidence': [], 'approvals': []})
+            : _err('PROVIDER_NOT_FOUND', 404);
+      case 'POST /v1/provider/apply':
+        applied = jsonDecode(req.body) as Map<String, dynamic>;
+        hasProfile = true;
+        return _j({'provider_id': 'p1', 'application_state': 'draft'}, 201);
+      case 'GET /v1/offers/me':
+        return _j(acceptKeys.where((k) => k != null).length > 1 || status != 'accepted' ? [] : [
+          {'id': 'o1', 'category_code': 'household_cleaning', 'start_at': '2026-11-07T04:30:00Z', 'end_at': '2026-11-07T06:30:00Z',
+            'expires_at': DateTime.now().toUtc().add(const Duration(minutes: 9)).toIso8601String(), 'distance_band': '<2 km',
+            'area_label': 'Synthetic Kandy Central', 'task_codes': ['dusting'], 'total_minor': 240000, 'currency': 'LKR'}
+        ]);
+      case 'POST /v1/offers/o1/accept':
+        acceptKeys.add(req.headers['Idempotency-Key']);
+        if (dropFirstAccept && acceptKeys.length == 1) throw http.ClientException('connection reset'); // response lost
+        return _j({'booking_id': 'b1', 'status': 'accepted', 'replayed': acceptKeys.length > 1});
+      case 'GET /v1/bookings/b1':
+        return _j({
+          'booking_id': 'b1', 'status': status, 'version': version, 'start_at': '2026-11-07T04:30:00Z', 'end_at': '2026-11-07T06:30:00Z',
+          'task_codes': ['dusting'], 'price': {'amount_minor': 240000, 'payment_status': 'UNPAID'},
+          if (const {'accepted', 'en_route', 'arrived', 'in_progress'}.contains(status))
+            'address': {'text': '12 Synthetic Lane, Kandy', 'pin': '7.290600,80.633700'},
+        });
+      case 'POST /v1/bookings/b1/transitions':
+        final body = jsonDecode(req.body) as Map<String, dynamic>;
+        transitions.add(body);
+        if (body['target_status'] == 'in_progress' && body['checkin_pin'] != '4821') return _err('CHECKIN_PIN_INVALID', 422);
+        status = body['target_status'] as String;
+        version++;
+        return _j({'booking_id': 'b1', 'status': status, 'version': version});
+    }
+    return _err('NOT_FOUND', 404);
+  }
+}
+
+Future<void> signIn(WidgetTester tester) async {
+  await tester.tap(find.byKey(const Key('lang-en')));
+  await tester.pumpAndSettle();
+  await tester.enterText(find.byKey(const Key('phone')), '+94771000001');
+  await tester.tap(find.byKey(const Key('send-code')));
+  await tester.pumpAndSettle();
+  await tester.enterText(find.byKey(const Key('code')), '123456');
+  await tester.tap(find.byKey(const Key('verify')));
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 300));
+}
+
+void main() {
+  setUp(() {});
+
+  testWidgets('new provider sees onboarding and can apply', (tester) async {
+    final backend = FakeBackend()..hasProfile = false;
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient(backend.handle));
+    await tester.pumpWidget(ProviderApp(api: api, showMaps: false, offerPoll: const Duration(hours: 1)));
+    await tester.pumpAndSettle();
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    expect(find.text('Work with Hela'), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('legal-name')), 'Synthetic Provider');
+    await tester.tap(find.byKey(const Key('dob')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Apply'));
+    await tester.pumpAndSettle();
+    expect(backend.applied!['legal_name'], 'Synthetic Provider');
+    expect(find.text('Job offers'), findsOneWidget);
+  });
+
+  testWidgets('offer without address -> accept survives a lost response -> address -> PIN check-in', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2600);
+    tester.view.devicePixelRatio = 2.5;
+    addTearDown(tester.view.reset);
+    final backend = FakeBackend()..dropFirstAccept = true;
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient(backend.handle));
+    await tester.pumpWidget(ProviderApp(api: api, showMaps: false, offerPoll: const Duration(hours: 1)));
+    await tester.pumpAndSettle();
+    await signIn(tester);
+    await tester.pump(const Duration(seconds: 1));
+
+    // P05: offer card shows area, band, time, tasks, price, countdown; never the address.
+    expect(find.byKey(const Key('offer-o1')), findsOneWidget);
+    expect(find.textContaining('Synthetic Kandy Central · <2 km'), findsOneWidget);
+    expect(find.textContaining('Synthetic Lane'), findsNothing);
+    expect(find.byKey(const Key('countdown')), findsOneWidget);
+
+    // First tap: the response is lost. The app says nothing changed and does not pretend it got the job.
+    await tester.tap(find.widgetWithText(FilledButton, 'Accept'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.textContaining('No connection'), findsOneWidget);
+    // Retry uses the same idempotency key, so the server returns the same booking instead of a second one.
+    await tester.tap(find.widgetWithText(FilledButton, 'Accept'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(backend.acceptKeys, hasLength(2));
+    expect(backend.acceptKeys[0], backend.acceptKeys[1]);
+
+    // P06: address only now.
+    expect(find.byKey(const Key('address')), findsOneWidget);
+    expect(find.textContaining('12 Synthetic Lane'), findsOneWidget);
+
+    Future<void> press(String label) async {
+      await tester.tap(find.widgetWithText(FilledButton, label));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+
+    await press('I am on my way');
+    await press('I have arrived');
+    await tester.enterText(find.byKey(const Key('checkin-pin')), '0000');
+    await press('Start work');
+    expect(find.textContaining('CHECKIN_PIN_INVALID'), findsOneWidget);
+    expect(backend.status, 'arrived');
+    await tester.enterText(find.byKey(const Key('checkin-pin')), '4821');
+    await press('Start work');
+    expect(backend.status, 'in_progress');
+    await press('Work is finished');
+    expect(backend.status, 'completed_pending_confirmation');
+    expect(backend.transitions.map((t) => t['expected_version']), [1, 2, 3, 3, 4]); // version-checked every time
+    expect(find.byKey(const Key('address')), findsNothing); // address hidden once work is done
+  });
+}

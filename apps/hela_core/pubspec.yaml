@@ -1,0 +1,22 @@
+name: hela_core
+description: Shared API client, session, localisation and widgets for the Hela Service apps (synthetic development only).
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.9.0
+  flutter: ">=3.35.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: 1.6.0
+  http_parser: 4.1.2
+  flutter_secure_storage: 11.2.0
+  flutter_map: 8.3.2
+  latlong2: 0.10.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
