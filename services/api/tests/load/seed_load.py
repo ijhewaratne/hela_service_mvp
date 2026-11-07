@@ -43,10 +43,11 @@ def main(out_path: str) -> None:
     from hela.core.config import Settings
     from hela.customers.routes import coarse
     from hela.identity.sessions import open_session
-    from hela.security.crypto import EnvKeyProvider, FieldCipher
+    from hela.security.crypto import FieldCipher
+    from hela.security.keys import build_key_provider
 
     settings = Settings(env='dev', database_url=APP, refresh_token_days=1, access_token_minutes=120)
-    cipher = FieldCipher(EnvKeyProvider(settings.field_key_b64, settings.lookup_key_b64))
+    cipher = FieldCipher(build_key_provider(settings))
     rng = random.Random(20261106)
     tokens = {'customers': [], 'providers': []}
     with owner.begin() as con:
@@ -74,8 +75,9 @@ def main(out_path: str) -> None:
                 for _ in range(req['count']):
                     con.execute(text('''INSERT INTO provider_evidence(provider_id, evidence_type, object_key, wrapped_data_key,
                                             sha256, media_type, size_bytes, scan_state, review_state, next_review_due)
-                                        VALUES (:p, :t, 'load', '\\x00', 'x', 'application/pdf', 1, 'clean', 'accepted',
-                                                current_date + 365)'''), {'p': pid, 't': req['type']})
+                                        VALUES (:p, :t, 'load', :k, 'x', 'application/pdf', 1, 'clean', 'accepted',
+                                                current_date + 365)'''),
+                                {'p': pid, 't': req['type'], 'k': cipher.encrypt('00' * 32, context='provider_evidence.data_key')})
             con.execute(text('''INSERT INTO provider_category_approvals(provider_id, category_code, policy_id, status,
                                     valid_from, valid_until, decided_by, decided_at)
                                 SELECT :p, 'household_cleaning', id, 'approved', now() - interval '1 day',

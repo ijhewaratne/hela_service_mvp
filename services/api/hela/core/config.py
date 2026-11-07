@@ -1,6 +1,8 @@
 """Runtime settings. Secrets come from the environment only; nothing secret is committed."""
 from __future__ import annotations
 
+import base64
+import json
 from functools import lru_cache
 from typing import Literal
 
@@ -15,13 +17,15 @@ class Settings(BaseSettings):
     database_url: str = 'postgresql+psycopg://hela_app:hela_app_dev_only@127.0.0.1:55432/hela'
     redis_url: str = 'redis://127.0.0.1:56379/0'
 
-    # Token signing and field encryption. Dev defaults are refused outside dev/test.
-    jwt_secret: str = Field(default='dev-only-jwt-secret-change-me-0123456789abcdef', min_length=32)
+    # Token signing and field encryption (see hela/security/keys.py). Dev defaults are refused outside dev/test.
+    key_provider: Literal['local'] = 'local'    # a managed KMS provider is required before staging (Q65)
+    jwt_keyring: str | None = None              # JSON {"active", "keys", "verify_only"}; Ed25519 seeds, base64
     jwt_issuer: str = 'hela-api'
     access_token_minutes: int = 10
     refresh_token_days: int = 30
     admin_refresh_token_hours: int = 12
-    field_key_b64: str = 'ZGV2LW9ubHktZmllbGQta2V5LTMyLWJ5dGVzLXh4eHg='  # 32 bytes, dev only
+    field_key_b64: str = 'ZGV2LW9ubHktZmllbGQta2V5LTMyLWJ5dGVzLXh4eHg='  # 32 bytes, dev only; key id 'k1'
+    field_keyring: str | None = None            # JSON {"active", "keys"}; replaces field_key_b64 when set
     lookup_key_b64: str = 'ZGV2LW9ubHktbG9va3VwLWtleS0zMi1ieXRlcy14eHg='  # 32 bytes, dev only
 
     otp_ttl_seconds: int = 300
@@ -67,20 +71,34 @@ class Settings(BaseSettings):
     # sent as Bearer headers, so CSRF does not apply (Q73). Keep this list explicit; never '*'.
     cors_origins: list[str] = ['http://localhost:5173', 'http://127.0.0.1:5173']
 
+    # Prometheus scrape endpoint (/internal/metrics). Not mounted unless a token is set (§17).
+    metrics_token: str | None = Field(default=None, min_length=24)
+
     # Sandbox SMS inbox: only mounted when env == 'dev' and a token is configured.
     dev_inbox_token: str | None = None
 
     @model_validator(mode='after')
     def refuse_dev_secrets_outside_dev(self):
+        from ..security.keys import DEV_MARKER, field_keyring, signing_keys
+        jwt_keys, field_keys = signing_keys(self), field_keyring(self)   # malformed key config fails at start-up
         if self.env in ('staging', 'production'):
-            if 'dev-only' in self.jwt_secret or self.field_key_b64.startswith('ZGV2LW9ubHkt') \
-                    or self.lookup_key_b64.startswith('ZGV2LW9ubHkt'):
+            if jwt_keys.dev_material or field_keys.has_dev_material() \
+                    or base64.b64decode(self.lookup_key_b64).startswith(DEV_MARKER):
                 raise ValueError('Development secrets are not allowed outside dev/test')
             if 'dev_s3_secret_only' in self.s3_secret_key:
                 raise ValueError('Development storage credentials are not allowed outside dev/test')
             if self.dev_inbox_token:
                 raise ValueError('The sandbox SMS inbox cannot be enabled outside dev')
         return self
+
+
+    def effective_jwt_keyring(self) -> str:
+        if self.jwt_keyring:
+            return self.jwt_keyring
+        return json.dumps({'active': 'dev1', 'keys': {'dev1': _DEV_JWT_SEED}})
+
+
+_DEV_JWT_SEED = 'ZGV2LW9ubHktand0LWVkMjU1MTktc2VlZC0zMmJ5dGU='  # b'dev-only-jwt-ed25519-seed-32byte'
 
 
 @lru_cache

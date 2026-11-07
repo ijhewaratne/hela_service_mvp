@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from hela.app import create_app
 from hela.core.config import Settings
+from hela.security.keys import signing_keys
 
 PHONE = '+94770000001'
 
@@ -140,8 +141,9 @@ def test_forged_expired_and_wrong_audience_tokens_rejected(client, login, settin
     tokens = login()
     claims = jwt.decode(tokens['access_token'], options={'verify_signature': False})
     forged = jwt.encode({**claims, 'sub': '00000000-0000-0000-0000-000000000000'}, 'x' * 40, algorithm='HS256')
-    expired = jwt.encode({**claims, 'exp': datetime.now(UTC) - timedelta(seconds=1)}, settings.jwt_secret,
-                         algorithm='HS256')
+    keys = signing_keys(settings)
+    expired = jwt.encode({**claims, 'exp': datetime.now(UTC) - timedelta(seconds=1)}, keys.private,
+                         algorithm='EdDSA', headers={'kid': keys.active})
     for token in (forged, expired, 'not-a-token'):
         r = client.get('/v1/me', headers={'Authorization': f'Bearer {token}'})
         assert r.json()['error']['code'] == 'TOKEN_INVALID'

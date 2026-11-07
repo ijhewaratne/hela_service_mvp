@@ -1,0 +1,15 @@
+# Example scrape configuration (not connected to any environment). The API exposes /internal/metrics only
+# when HELA_METRICS_TOKEN is set; keep that path off the public load balancer and scrape it on the private network.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+rule_files:
+  - alerts.yml
+scrape_configs:
+  - job_name: hela-api
+    metrics_path: /internal/metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/hela_metrics_token
+    static_configs:
+      - targets: ['hela-api:8000']

@@ -25,9 +25,11 @@ from .evidence.storage import EvidenceSealer, S3ObjectStore
 from .identity import admin_routes, dev_inbox
 from .identity import routes as identity_routes
 from .identity.sms import SandboxInboxSender, UnconfiguredSender
+from .ops import metrics
 from .privacy import routes as privacy_routes
 from .safety import incidents
-from .security.crypto import EnvKeyProvider, FieldCipher
+from .security.crypto import FieldCipher
+from .security.keys import build_key_provider
 from .verification import admin_routes as verification_admin_routes
 from .verification import provider_routes
 
@@ -38,7 +40,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                   description='Not approved for real users, real data or public deployment.',
                   docs_url='/docs' if settings.env in ('dev', 'test') else None, redoc_url=None)
     sandbox = settings.env in ('dev', 'test')
-    cipher = FieldCipher(EnvKeyProvider(settings.field_key_b64, settings.lookup_key_b64))
+    cipher = FieldCipher(build_key_provider(settings))
     app.state.services = Services(
         settings=settings,
         engine=make_engine(settings.database_url),
@@ -51,6 +53,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         scanner=ClamdScanner(settings.clamd_host, settings.clamd_port) if settings.clamd_host else NoScanner(),
     )
     errors.install(app)
+    metrics.install(app, app.state.services)
     app.add_middleware(SecurityMiddleware, settings=settings)
     if settings.cors_origins:
         app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=False,

@@ -121,9 +121,25 @@ def _wait(db, sql, predicate, timeout=60):
     raise AssertionError(f'timed out: {sql} -> {value}')
 
 
+_SPAWNED: list[subprocess.Popen] = []
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_workers():
+    """A worker left running after a failed test would keep claiming jobs in the next tests' database."""
+    yield
+    while _SPAWNED:
+        p = _SPAWNED.pop()
+        if p.poll() is None:
+            p.kill()
+            p.wait(timeout=10)
+
+
 def _workers(n):
-    return [subprocess.Popen([sys.executable, '-m', 'hela.worker'], cwd=API_DIR, env=_env(),
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for _ in range(n)]
+    procs = [subprocess.Popen([sys.executable, '-m', 'hela.worker'], cwd=API_DIR, env=_env(),
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for _ in range(n)]
+    _SPAWNED.extend(procs)
+    return procs
 
 
 def test_several_workers_deliver_each_notification_exactly_once(world, app, db, client):
@@ -202,9 +218,12 @@ def test_crashed_lock_holder_does_not_block_or_corrupt_acceptance(world, live_se
                                     headers={**bearer(p_tok), 'Idempotency-Key': 'mp-lock-0001'}).status_code
     t = threading.Thread(target=accept)
     t.start()
-    time.sleep(1.0)
-    assert 'code' not in result                         # blocked behind the row lock, as designed
-    os.kill(holder.pid, signal.SIGKILL)                 # the holder dies without committing or rolling back
+    try:
+        time.sleep(1.0)
+        assert 'code' not in result                     # blocked behind the row lock, as designed
+    finally:
+        os.kill(holder.pid, signal.SIGKILL)             # the holder dies without committing or rolling back
+        holder.join(timeout=10)                         # (also on failure: a live holder would block later tests)
     t.join(timeout=30)
     assert result.get('code') == 200
     assert db('SELECT count(*) AS n FROM bookings')[0]['n'] == 1

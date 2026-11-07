@@ -69,7 +69,8 @@ export function Table({ columns, rows, empty = 'Nothing here.' }: {
     <div className="table-wrap">
       <table>
         <thead>
-          <tr>{columns.map((c) => <th key={c.key} scope="col">{c.label}</th>)}</tr>
+          {/* Columns of buttons have no visible heading; screen readers still get one. */}
+          <tr>{columns.map((c) => <th key={c.key} scope="col">{c.label || <span className="sr-only">Actions</span>}</th>)}</tr>
         </thead>
         <tbody>
           {rows.map((r, i) => (

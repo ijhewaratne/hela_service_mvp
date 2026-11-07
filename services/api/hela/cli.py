@@ -6,6 +6,10 @@
   python -m hela.cli init-storage
   python -m hela.cli expire-verifications
   python -m hela.cli rescan-evidence
+  python -m hela.cli generate-keys
+  python -m hela.cli key-status
+  python -m hela.cli rotate-field-keys
+  python -m hela.cli record-heartbeat --name backup --status ok
 """
 from __future__ import annotations
 
@@ -20,7 +24,10 @@ from .core.config import get_settings
 from .core.db import make_engine, many, one, run, tx
 from .evidence.scanning import ClamdScanner
 from .evidence.storage import EvidenceSealer, S3ObjectStore
-from .security.crypto import EnvKeyProvider, FieldCipher
+from .ops import metrics as heartbeats
+from .security import rotation
+from .security.crypto import FieldCipher
+from .security.keys import build_key_provider
 from .security.passwords import hash_password, new_totp_secret, provisioning_uri
 from .verification.expiry import expire_due
 
@@ -63,8 +70,13 @@ NOTICES = [
 ]
 
 
+def _owner_url() -> str:
+    return os.environ.get('HELA_MIGRATION_DATABASE_URL',
+                          'postgresql+psycopg://hela_owner:hela_owner_dev_only@127.0.0.1:55432/hela')
+
+
 def _cipher(settings):
-    return FieldCipher(EnvKeyProvider(settings.field_key_b64, settings.lookup_key_b64))
+    return FieldCipher(build_key_provider(settings))
 
 
 def create_admin(args) -> int:
@@ -95,9 +107,7 @@ def seed_synthetic(_args) -> int:
         print('Refusing to seed synthetic data outside dev/test.', file=sys.stderr)
         return 2
     # Category policies are privileged reference data the runtime role cannot write, so seed as the owner.
-    owner_url = os.environ.get('HELA_MIGRATION_DATABASE_URL',
-                               'postgresql+psycopg://hela_owner:hela_owner_dev_only@127.0.0.1:55432/hela')
-    with tx(make_engine(owner_url)) as con:
+    with tx(make_engine(_owner_url())) as con:
         region = one(con, '''INSERT INTO service_regions(code, name, boundary, status, is_synthetic)
                              VALUES ('synthetic_kandy_central', 'Synthetic Kandy Central (fictional boundary)',
                                      ST_GeogFromText(:wkt), 'enabled', true)
@@ -194,6 +204,53 @@ def rescan_evidence(_args) -> int:
     return 0
 
 
+def generate_keys(args) -> int:
+    """Print fresh key material for a keyring entry. Store it in the secret manager, never in a file in the repo."""
+    import base64
+    import secrets
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    field = base64.b64encode(secrets.token_bytes(32)).decode()
+    seed = secrets.token_bytes(32)
+    public = Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    print(json.dumps({'field_key': {args.key_id: field},
+                      'jwt_seed': {args.key_id: base64.b64encode(seed).decode()},
+                      'jwt_public_for_verify_only': {args.key_id: base64.b64encode(public).decode()}}, indent=2))
+    return 0
+
+
+def key_status(_args) -> int:
+    settings = get_settings()
+    status = rotation.key_status(make_engine(_owner_url()))
+    active = _cipher(settings).active_key_id
+    print(f'Active field key: {active}')
+    for column, counts in status.items():
+        if counts:
+            print(f'  {column:45} ' + ', '.join(f'{k}={n}' for k, n in sorted(counts.items())))
+    left = sum(n for counts in status.values() for k, n in counts.items() if k != active)
+    print(f'Values under other keys: {left}' + ('' if left else ' (older keys can be removed from the ring)'))
+    return 0
+
+
+def rotate_field_keys(args) -> int:
+    settings = get_settings()
+    cipher = _cipher(settings)
+    engine = make_engine(_owner_url())
+    done = rotation.rewrap_all(engine, cipher, batch=args.batch)
+    left = rotation.remaining_under_other_keys(engine, cipher.active_key_id)
+    print(json.dumps({'active_key': cipher.active_key_id, 'rewrapped': {k: v for k, v in done.items() if v},
+                      'remaining_under_other_keys': left}))
+    return 0 if left == 0 else 3      # rows locked by live traffic are skipped; run again
+
+
+def record_heartbeat(args) -> int:
+    """Called by scheduled operational checks (e.g. scripts/backup_restore_check.sh) for the monitoring alerts."""
+    with tx(make_engine(get_settings().database_url)) as con:
+        heartbeats.record_heartbeat(con, args.name, ok=args.status == 'ok', detail=args.detail)
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog='hela.cli')
     sub = parser.add_subparsers(dest='cmd', required=True)
@@ -207,6 +264,18 @@ def main(argv=None) -> int:
     sub.add_parser('init-storage').set_defaults(fn=init_storage)
     sub.add_parser('expire-verifications').set_defaults(fn=expire_verifications)
     sub.add_parser('rescan-evidence').set_defaults(fn=rescan_evidence)
+    gk = sub.add_parser('generate-keys')
+    gk.add_argument('--key-id', required=True)
+    gk.set_defaults(fn=generate_keys)
+    sub.add_parser('key-status').set_defaults(fn=key_status)
+    rk = sub.add_parser('rotate-field-keys')
+    rk.add_argument('--batch', type=int, default=200)
+    rk.set_defaults(fn=rotate_field_keys)
+    hb = sub.add_parser('record-heartbeat')
+    hb.add_argument('--name', required=True)
+    hb.add_argument('--status', choices=['ok', 'failed'], required=True)
+    hb.add_argument('--detail')
+    hb.set_defaults(fn=record_heartbeat)
     args = parser.parse_args(argv)
     return args.fn(args)
 

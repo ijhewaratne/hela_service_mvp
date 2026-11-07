@@ -12,7 +12,7 @@ class AccountScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = Strings.of(context);
     return ListView(padding: const EdgeInsets.all(16), children: [
-      Text('Account', style: Theme.of(context).textTheme.headlineSmall),
+      ScreenTitle('Account'),
       AsyncSection<Map<String, dynamic>>(
         load: () async => await api.get('/v1/me') as Map<String, dynamic>,
         builder: (context, me, _) => ListTile(title: Text(me['display_name'] as String? ?? 'Customer'), subtitle: Text(me['phone_masked'] as String)),
@@ -162,10 +162,10 @@ class NotificationsScreen extends StatelessWidget {
           load: () async => await api.get('/v1/me/notifications') as List,
           builder: (context, list, _) => Column(children: [
             for (final n in list.cast<Map<String, dynamic>>())
-              ListTile(
+              StatusTile(
                 title: Text((n['template_key'] as String).replaceAll('.', ' · ')),
                 subtitle: Text(formatLocal(n['created_at'] as String)),
-                trailing: StatusChip(n['status'] as String),
+                status: n['status'] as String,
               ),
           ]),
         ),

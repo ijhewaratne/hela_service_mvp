@@ -128,7 +128,7 @@ class ServicesHome extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(padding: const EdgeInsets.all(16), children: [
-      Text('Book a service', style: Theme.of(context).textTheme.headlineSmall),
+      ScreenTitle('Book a service'),
       const AppNotices(),
       AsyncSection<List<dynamic>>(
         load: () async => [await api.get('/v1/regions'), await api.get('/v1/categories')],

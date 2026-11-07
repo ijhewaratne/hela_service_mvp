@@ -1,0 +1,22 @@
+# Staging overlay skeleton. Replace every *.example.invalid value, set image tags from the release pipeline, and
+# add the controller-specific admin allowlist. Production would be a sibling overlay with HELA_ENV=production.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  - name: registry.example.invalid/hela/api
+    newTag: "0.0.0-staging"
+  - name: registry.example.invalid/hela/admin
+    newTag: "0.0.0-staging"
+patches:
+  - target: {kind: ConfigMap, name: hela-config}
+    patch: |-
+      - op: replace
+        path: /data/HELA_ENV
+        value: staging
+  - target: {kind: Deployment, name: hela-worker}
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1

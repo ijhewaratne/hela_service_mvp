@@ -1,0 +1,27 @@
+# Generic Ingress. Only /v1 and /health are routed to the API, so /internal/metrics and /docs are never public.
+# The admin host must also be restricted to staff networks (Q73: IP allowlist or VPN). How that is expressed
+# depends on the ingress controller (an annotation or a policy object), so it is set in the overlay.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hela
+spec:
+  tls:
+    - hosts: [api.example.invalid, admin.example.invalid]
+      secretName: hela-tls
+  rules:
+    - host: api.example.invalid
+      http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend: {service: {name: hela-api, port: {name: http}}}
+          - path: /health
+            pathType: Exact
+            backend: {service: {name: hela-api, port: {name: http}}}
+    - host: admin.example.invalid
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: hela-admin, port: {name: http}}}

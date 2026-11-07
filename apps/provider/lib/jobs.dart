@@ -10,17 +10,17 @@ class JobsList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(padding: const EdgeInsets.all(16), children: [
-      Text('My jobs', style: Theme.of(context).textTheme.headlineSmall),
+      ScreenTitle('My jobs'),
       AsyncSection<List<dynamic>>(
         load: () async => await api.get('/v1/provider/bookings') as List,
         builder: (context, list, reload) => Column(children: [
           if (list.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Text('No jobs yet.')),
           for (final j in list.cast<Map<String, dynamic>>())
             Card(
-              child: ListTile(
+              child: StatusTile(
                 title: Text((j['category_code'] as String).replaceAll('_', ' ')),
                 subtitle: Text('${formatLocal(j['start_at'] as String)} · ${j['area_label']}'),
-                trailing: StatusChip(j['status'] as String),
+                status: j['status'] as String,
                 onTap: () async {
                   await Navigator.of(context).push(MaterialPageRoute(builder: (_) => JobScreen(api: api, bookingId: j['id'] as String)));
                   reload();

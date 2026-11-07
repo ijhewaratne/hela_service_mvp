@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import 'api_client.dart';
 import 'format.dart';
+import 'l10n.dart';
 import 'widgets.dart';
 
 /// "My data" (FR-ID-08, Q66): see past privacy requests, file a new one, or download your own data.
@@ -43,7 +44,12 @@ class _MyDataScreenState extends State<MyDataScreen> {
             TextButton.icon(
               icon: const Icon(Icons.copy),
               label: const Text('Copy'),
-              onPressed: () => Clipboard.setData(ClipboardData(text: _export!)),
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: _export!));
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Strings.of(context).t('common.copied'))));
+                }
+              },
             ),
           ]),
           Container(
@@ -86,10 +92,10 @@ class _MyDataScreenState extends State<MyDataScreen> {
           builder: (context, list, _) => Column(children: [
             if (list.isEmpty) const Text('None yet.'),
             for (final r in list.cast<Map<String, dynamic>>())
-              ListTile(
+              StatusTile(
                 title: Text((r['kind'] as String).replaceAll('_', ' ')),
                 subtitle: Text('Sent ${formatLocal(r['created_at'] as String)}'),
-                trailing: StatusChip(r['status'] as String),
+                status: r['status'] as String,
               ),
           ]),
         ),

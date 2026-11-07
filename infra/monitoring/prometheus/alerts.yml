@@ -1,0 +1,161 @@
+# Hela Service alert rules (spec §17, §11.4). Thresholds are SYNTHETIC DEFAULTS pending operations sign-off;
+# tune them against pilot traffic. State gauges are reported identically by every API process, so rules
+# aggregate them with max() rather than sum().
+groups:
+  - name: hela-availability
+    rules:
+      - alert: HelaApiDown
+        expr: up{job="hela-api"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: An API instance is not answering scrapes.
+          runbook: Check the process and its logs; check the database and Redis health endpoints.
+      - alert: HelaDatabaseUnreachable
+        expr: max(hela_db_up) == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: The API cannot read operational state from Postgres.
+      - alert: HelaHighErrorRate
+        expr: |
+          sum(rate(hela_http_requests_total{status_class="5xx"}[5m]))
+            / clamp_min(sum(rate(hela_http_requests_total[5m])), 0.001) > 0.05
+          and sum(rate(hela_http_requests_total[5m])) > 0.1
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: More than 5% of API requests are failing with server errors.
+      - alert: HelaSlowRequests
+        expr: histogram_quantile(0.95, sum by (le) (rate(hela_http_request_duration_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: 95th percentile API latency is above 1 second (NFR-03).
+
+  - name: hela-background-work
+    rules:
+      - alert: HelaWorkerHeartbeatMissing
+        expr: max(hela_heartbeat_age_seconds{name="worker"}) > 60 or absent(hela_heartbeat_age_seconds{name="worker"})
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: No worker has reported in for over a minute; offers, expiries and SMS are not being processed.
+      - alert: HelaJobsStuck
+        expr: max(hela_jobs_oldest_overdue_seconds) > 120
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: Background jobs are due but not being picked up (offer expiry, dispatch, notifications).
+      - alert: HelaJobRunningTooLong
+        expr: max(hela_jobs_oldest_running_seconds) > 300
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: A job has been marked running for over 5 minutes; its worker may have died while holding it.
+      - alert: HelaDeadJobs
+        expr: max(hela_jobs{status="dead"}) > 0
+        for: 1m
+        labels: {severity: warning}
+        annotations:
+          summary: Jobs have exhausted their retries and need an operator.
+      - alert: HelaOutboxStuck
+        expr: max(hela_outbox_oldest_queued_seconds) > 300
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: SMS notifications have been queued for over 5 minutes (stuck outbox).
+      - alert: HelaOutboxDeadLetters
+        expr: max(hela_outbox{status="dead"}) > 0
+        for: 1m
+        labels: {severity: warning}
+        annotations:
+          summary: Notifications failed permanently; the people concerned have not been told.
+      - alert: HelaAuditSealingLag
+        expr: max(hela_audit_oldest_unsealed_seconds) > 120
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: Audit rows are not being sealed into the hash chain.
+      - alert: HelaApprovalsPastExpiry
+        expr: max(hela_approvals_past_expiry) > 0
+        for: 30m
+        labels: {severity: critical}
+        annotations:
+          summary: Provider category approvals are still active after their expiry date (expiry job not running).
+          runbook: Run `python -m hela.cli expire-verifications` and check the worker.
+
+  - name: hela-backups
+    rules:
+      - alert: HelaBackupFailed
+        expr: max(hela_heartbeat_failing{name="backup"}) == 1
+        for: 0m
+        labels: {severity: critical}
+        annotations:
+          summary: The latest backup or restore check failed.
+      - alert: HelaBackupStale
+        expr: max(hela_heartbeat_age_seconds{name="backup"}) > 26 * 3600 or absent(hela_heartbeat_age_seconds{name="backup"})
+        for: 30m
+        labels: {severity: critical}
+        annotations:
+          summary: No successful backup and restore check in the last 26 hours.
+
+  - name: hela-marketplace-and-safety
+    rules:
+      - alert: HelaCompetingAcceptancesHigh
+        # Losing races are expected and safe (the database allows one winner). A burst suggests a client retry
+        # loop, a dispatch bug or abuse.
+        expr: sum(increase(hela_api_errors_total{code=~"BOOKING_ALREADY_ASSIGNED|ASSIGNMENT_CONFLICT|REQUEST_NOT_OFFERING"}[15m])) > 10
+        for: 0m
+        labels: {severity: warning}
+        annotations:
+          summary: Unusually many attempts to accept requests that another provider already won.
+      - alert: HelaLowSupply
+        expr: |
+          max(hela_requests_unfulfilled_1h) / clamp_min(max(hela_requests_created_1h), 1) > 0.3
+          and max(hela_requests_created_1h) >= 5
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: Over 30% of requests in the last hour found no eligible provider. Do not widen the radius
+            beyond policy; review supply and exclusion reasons.
+      - alert: HelaIncidentResponseOverdue
+        expr: max(hela_incidents_first_response_overdue) > 0
+        for: 0m
+        labels: {severity: critical}
+        annotations:
+          summary: A safety incident has passed its first-response target without a response.
+      - alert: HelaPrivacyRequestsOverdue
+        expr: max(hela_privacy_requests_overdue) > 0
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: Privacy requests are past their (unapproved) response target.
+      - alert: HelaPaymentDisputesHigh
+        expr: max(hela_settlements_disputed) > 5
+        for: 1h
+        labels: {severity: info}
+        annotations:
+          summary: Several offline payment acknowledgements are in dispute.
+
+  - name: hela-security
+    rules:
+      - alert: HelaUnusualEvidenceAccess
+        expr: max(hela_evidence_access_1h_max_per_admin) > 20
+        for: 0m
+        labels: {severity: critical}
+        annotations:
+          summary: One administrator opened over 20 identity evidence files in an hour.
+          runbook: Review sensitive_access_logs for that hour; suspend the admin session if the access is not explained.
+      - alert: HelaUnusualSensitiveAccess
+        expr: max(hela_sensitive_access_1h_max_per_admin) > 50
+        for: 0m
+        labels: {severity: warning}
+        annotations:
+          summary: One administrator read over 50 sensitive records of one kind in an hour.
+      - alert: HelaOtpLockoutSpike
+        expr: max(hela_otp_lockouts_1h) > 20
+        for: 0m
+        labels: {severity: warning}
+        annotations:
+          summary: Many sign-in codes were locked in the last hour (possible guessing attack).

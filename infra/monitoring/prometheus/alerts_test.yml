@@ -1,0 +1,123 @@
+# promtool unit tests for alerts.yml:
+#   docker run --rm -v "$PWD":/w -w /w --entrypoint promtool prom/prometheus:v3.5.0 test rules alerts_test.yml
+rule_files:
+  - alerts.yml
+evaluation_interval: 1m
+tests:
+  - name: stuck jobs and a silent worker
+    interval: 1m
+    input_series:
+      - series: hela_jobs_oldest_overdue_seconds{instance="api-1"}
+        values: 0 0 300x10
+      - series: hela_heartbeat_age_seconds{instance="api-1",name="worker"}
+        values: 5 5 5 200x10
+      - series: hela_heartbeat_age_seconds{instance="api-1",name="backup"}
+        values: 3600x60
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HelaJobsStuck
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: HelaJobsStuck
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: Background jobs are due but not being picked up (offer expiry, dispatch, notifications).
+      - eval_time: 6m
+        alertname: HelaWorkerHeartbeatMissing
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: No worker has reported in for over a minute; offers, expiries and SMS are not being processed.
+      - eval_time: 30m
+        alertname: HelaBackupStale
+        exp_alerts: []
+
+  - name: failed backup and missing backup heartbeat
+    interval: 1m
+    input_series:
+      - series: hela_heartbeat_failing{instance="api-1",name="backup"}
+        values: 0 0 1
+      - series: hela_heartbeat_age_seconds{instance="api-1",name="worker"}
+        values: 5x60
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HelaBackupFailed
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: HelaBackupFailed
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: The latest backup or restore check failed.
+      - eval_time: 45m
+        alertname: HelaBackupStale
+        exp_alerts:   # absent() keeps the selector's label
+          - exp_labels: {severity: critical, name: backup}
+            exp_annotations:
+              summary: No successful backup and restore check in the last 26 hours.
+
+  - name: error rate and competing acceptances
+    interval: 1m
+    input_series:
+      - series: hela_http_requests_total{instance="api-1",method="GET",route="/v1/me",status_class="2xx"}
+        values: 0+60x20
+      - series: hela_http_requests_total{instance="api-1",method="GET",route="/v1/me",status_class="5xx"}
+        values: 0+12x20
+      - series: hela_api_errors_total{instance="api-1",code="BOOKING_ALREADY_ASSIGNED"}
+        values: 0 1 2 3 20
+      - series: hela_api_errors_total{instance="api-1",code="OFFER_NOT_ACTIVE"}
+        values: 0 50 100 150 200
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: HelaHighErrorRate
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: More than 5% of API requests are failing with server errors.
+      - eval_time: 3m
+        alertname: HelaCompetingAcceptancesHigh
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: HelaCompetingAcceptancesHigh
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Unusually many attempts to accept requests that another provider already won.
+
+  - name: safety and staff access
+    interval: 1m
+    input_series:
+      - series: hela_incidents_first_response_overdue{instance="api-1"}
+        values: 0 1
+      - series: hela_incidents_first_response_overdue{instance="api-2"}
+        values: 0 1
+      - series: hela_evidence_access_1h_max_per_admin{instance="api-1"}
+        values: 3 25
+      - series: hela_requests_created_1h{instance="api-1"}
+        values: 10x30
+      - series: hela_requests_unfulfilled_1h{instance="api-1"}
+        values: 1x10 5x20
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HelaIncidentResponseOverdue
+        exp_alerts:   # two API processes report the same state: one alert, not two
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: A safety incident has passed its first-response target without a response.
+      - eval_time: 1m
+        alertname: HelaUnusualEvidenceAccess
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: One administrator opened over 20 identity evidence files in an hour.
+              runbook: Review sensitive_access_logs for that hour; suspend the admin session if the access is not explained.
+      - eval_time: 10m
+        alertname: HelaLowSupply
+        exp_alerts: []
+      - eval_time: 28m
+        alertname: HelaLowSupply
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Over 30% of requests in the last hour found no eligible provider. Do not widen the radius beyond policy; review supply and exclusion reasons.

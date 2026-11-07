@@ -11,17 +11,17 @@ class BookingsList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(padding: const EdgeInsets.all(16), children: [
-      Text('My bookings', style: Theme.of(context).textTheme.headlineSmall),
+      ScreenTitle('My bookings'),
       AsyncSection<List<dynamic>>(
         load: () async => await api.get('/v1/requests') as List,
         builder: (context, list, reload) => Column(children: [
           if (list.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Text('No bookings yet.')),
           for (final r in list.cast<Map<String, dynamic>>())
             Card(
-              child: ListTile(
+              child: StatusTile(
                 title: Text((r['category_code'] as String).replaceAll('_', ' ')),
                 subtitle: Text(formatLocal(r['start_at'] as String)),
-                trailing: StatusChip((r['booking_status'] ?? r['status']) as String),
+                status: (r['booking_status'] ?? r['status']) as String,
                 onTap: () async {
                   await Navigator.of(context).push(MaterialPageRoute(
                       builder: (_) => r['booking_id'] != null
@@ -135,7 +135,9 @@ class _BookingScreenState extends State<BookingScreen> {
               Wrap(children: [
                 for (var i = 1; i <= 5; i++)
                   IconButton(
-                    tooltip: '$i stars',
+                    key: Key('star-$i'),
+                    tooltip: 'Rate $i out of 5',
+                    isSelected: i == _rating,       // announced as "selected" for the chosen rating
                     icon: Icon(i <= _rating ? Icons.star : Icons.star_border),
                     onPressed: () => setState(() => _rating = i),
                   ),

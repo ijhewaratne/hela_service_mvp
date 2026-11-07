@@ -205,8 +205,7 @@ class _OffersScreenState extends State<OffersScreen> {
   Widget build(BuildContext context) {
     return ListView(padding: const EdgeInsets.all(16), children: [
       Row(children: [
-        Text('Job offers', style: Theme.of(context).textTheme.headlineSmall),
-        const Spacer(),
+        Expanded(child: ScreenTitle('Job offers')),
         IconButton(tooltip: 'Refresh', onPressed: _load, icon: const Icon(Icons.refresh)),
       ]),
       const AppNotices(),

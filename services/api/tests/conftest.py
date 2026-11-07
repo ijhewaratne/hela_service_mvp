@@ -14,7 +14,8 @@ from sqlalchemy import create_engine, text
 
 from hela.app import create_app
 from hela.core.config import Settings
-from hela.security.crypto import EnvKeyProvider, FieldCipher
+from hela.security.crypto import FieldCipher
+from hela.security.keys import build_key_provider
 from hela.security.passwords import hash_password
 
 API_DIR = Path(__file__).resolve().parents[1]
@@ -106,7 +107,7 @@ def db(owner_engine):
 
 @pytest.fixture
 def cipher(settings):
-    return FieldCipher(EnvKeyProvider(settings.field_key_b64, settings.lookup_key_b64))
+    return FieldCipher(build_key_provider(settings))
 
 
 @pytest.fixture
@@ -345,8 +346,9 @@ class World:
             for _ in range(req['count']):
                 self.db('''INSERT INTO provider_evidence(provider_id, evidence_type, object_key, wrapped_data_key, sha256,
                                media_type, size_bytes, scan_state, review_state, next_review_due, reviewed_by, reviewed_at)
-                           VALUES (:p, :t, 'fixture', '\\x00', 'x', 'application/pdf', 1, 'clean', 'accepted',
-                                   current_date + 365, :a, now())''', p=pid, t=req['type'], a=admin)
+                           VALUES (:p, :t, 'fixture', :k, 'x', 'application/pdf', 1, 'clean', 'accepted',
+                                   current_date + 365, :a, now())''', p=pid, t=req['type'], a=admin,
+                        k=enc('00' * 32, 'provider_evidence.data_key'))
         for cat in categories:
             self.db('''INSERT INTO provider_category_approvals(provider_id, category_code, policy_id, status, valid_from,
                            valid_until, decided_by, decided_at)

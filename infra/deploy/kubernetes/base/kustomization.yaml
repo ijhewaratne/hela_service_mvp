@@ -1,0 +1,24 @@
+# Cloud-neutral base (Q67, DEC-08 pending). Not connected to any cluster or provider. Managed Postgres/PostGIS,
+# Redis, S3-compatible storage, ClamAV, TLS certificates and the secret manager are supplied by the platform.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hela
+labels:
+  - pairs: {app.kubernetes.io/part-of: hela}
+    includeSelectors: false
+resources:
+  - namespace.yaml
+  - config.yaml
+  - api.yaml
+  - worker.yaml
+  - migrate-job.yaml
+  - admin.yaml
+  - network-policies.yaml
+  - ingress.yaml
+images:
+  - name: hela-api
+    newName: registry.example.invalid/hela/api
+    newTag: unset
+  - name: hela-admin
+    newName: registry.example.invalid/hela/admin
+    newTag: unset

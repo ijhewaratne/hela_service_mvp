@@ -11,6 +11,7 @@ from ..core.config import Settings
 from ..core.db import one, run
 from ..core.errors import ApiError
 from ..security.crypto import new_opaque_token, sha256_hex
+from ..security.keys import signing_keys
 from ..security.tokens import issue_access_token
 
 SubjectType = Literal['user', 'admin']
@@ -25,7 +26,7 @@ def _lifetime(settings: Settings, subject_type: SubjectType) -> timedelta:
 
 def _token_pair(settings: Settings, subject_type: SubjectType, subject_id: str, session_id: str,
                 refresh: str) -> dict:
-    access = issue_access_token(secret=settings.jwt_secret, issuer=settings.jwt_issuer,
+    access = issue_access_token(keys=signing_keys(settings), issuer=settings.jwt_issuer,
                                 audience=AUDIENCE[subject_type], subject=subject_id,
                                 session_id=session_id, minutes=settings.access_token_minutes)
     return {'access_token': access, 'token_type': 'Bearer', 'expires_in': settings.access_token_minutes * 60,

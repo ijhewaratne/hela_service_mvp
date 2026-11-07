@@ -12,8 +12,10 @@ from .audit import service as audit
 from .booking.jobs import handlers
 from .core.db import tx
 from .core.jobs import CHANNEL, run_due
+from .ops.metrics import record_heartbeat
 
 log = logging.getLogger('hela.worker')
+HEARTBEAT_SECONDS = 15
 
 
 def _listen(url: str):
@@ -50,7 +52,7 @@ def main() -> int:
     signal.signal(signal.SIGINT, stop)
     listener = _listen(svc.settings.database_url)
     log.info('worker started (%s handlers)', len(table))
-    last_seal = 0.0
+    last_seal = last_beat = 0.0
     while not stopping:
         try:
             if time.monotonic() - last_seal >= 1.0:
@@ -58,6 +60,10 @@ def main() -> int:
                     audit.seal(con)          # one sealer at a time; others skip via a try-lock
                 last_seal = time.monotonic()
             done = run_due(svc.engine, table)
+            if time.monotonic() - last_beat >= HEARTBEAT_SECONDS:
+                with tx(svc.engine) as con:
+                    record_heartbeat(con, 'worker', ok=True)   # alert fires if this stops (worker down or stuck)
+                last_beat = time.monotonic()
         except Exception:   # noqa: BLE001 - keep the loop alive across transient database errors
             log.exception('worker loop error')
             done = 0

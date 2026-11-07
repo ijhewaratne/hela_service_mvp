@@ -10,6 +10,7 @@ from sqlalchemy import Connection
 from ..core.db import many, one, run, tx
 from ..core.errors import ApiError
 from ..core.services import Services, services
+from ..security.keys import signing_keys
 from ..security.tokens import decode_access_token
 
 
@@ -67,7 +68,7 @@ def _live_session(con: Connection, claims: dict, subject_type: str, idle_minutes
 
 def _claims(svc: Services, token: str, audience: str) -> dict:
     try:
-        return decode_access_token(token, secret=svc.settings.jwt_secret, issuer=svc.settings.jwt_issuer,
+        return decode_access_token(token, keys=signing_keys(svc.settings), issuer=svc.settings.jwt_issuer,
                                    audience=audience)
     except jwt.InvalidTokenError:
         raise ApiError(401, 'TOKEN_INVALID', 'auth.invalid_token') from None

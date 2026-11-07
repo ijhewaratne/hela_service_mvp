@@ -13,6 +13,9 @@
 | `services/api/migrations/` | Alembic migrations (run as `hela_owner`; the API runs as least-privilege `hela_app`) |
 | `services/workers/` | How to run the background worker (`python -m hela.worker`) |
 | `infra/docker/` | Docker Compose dev stack (PostGIS, Redis, MinIO, ClamAV), bound to 127.0.0.1 |
+| `infra/monitoring/` | Prometheus scrape config, alert rules for spec §17 and their promtool tests |
+| `infra/deploy/` | Cloud-neutral deployment skeleton (Dockerfiles, Kustomize). Not connected to any provider (Q67) |
+| `apps/` | Flutter customer and provider apps, shared `hela_core` package, React admin console |
 | `legacy/v0_2/` | The original SQLite prototype, frozen and still tested. Never run its demo auth in the new backend. |
 | `docs/` | Spec questions, PRD, earlier design notes |
 | `scripts/env_check.sh` | Checks Python 3.12, Docker and ports |
@@ -25,8 +28,8 @@
 | M02 Provider trust: categories, onboarding, evidence storage, approvals, expiry | Done |
 | M03 Booking engine: addresses, quotes, requests, matching, offers, bookings, settlement, incidents | Done |
 | R1 gate hardening: multi-process/crash tests, load test, backup drill, ASVS self-assessment | **Done**: see [`docs/r1_gate/R1_GATE_REPORT.md`](docs/r1_gate/R1_GATE_REPORT.md) |
-| R2: Flutter customer/provider apps, React admin web | Next, after the R1 gate review |
-| R2: Flutter customer/provider apps, React admin | After the R1 gate |
+| R2: Flutter customer/provider apps, React admin web | Done: see [`apps/README.md`](apps/README.md). On-device testing is still open |
+| Operations hardening: key rotation, metrics and alerts, deployment skeleton, accessibility checks | Done: see below |
 
 ## Run locally (macOS)
 
@@ -139,13 +142,27 @@ address → quote → accept terms → request (beneficiary consent if booking f
 - **Notifications (FR-NOT, Q60):** an outbox with retries and duplicate protection. Messages never contain addresses, names or notes; they go through the sandbox SMS adapter.
 - **Jobs (Q69):** a durable job queue with leases, backoff and dead-lettering, plus an operations queue and alerts (A02).
 
+## Operations hardening: what's implemented
+
+- **Key rotation (Q65):** every encrypted value names its key (`v2` format); `rotate-field-keys` re-encrypts in
+  batches while the service runs, including append-only history rows (migration 0008 allows only `*_enc` columns
+  to change, only for the owner, only during a rotation). Access tokens are Ed25519 (EdDSA) with a `kid`, so the
+  signing key rotates with a verify-only overlap. `key-status` shows what is left under old keys.
+  See [`docs/security/KEY_ROTATION_RUNBOOK.md`](docs/security/KEY_ROTATION_RUNBOOK.md).
+- **Metrics and alerts (§17):** `/internal/metrics` (only with `HELA_METRICS_TOKEN`) and 22 alert rules covering
+  each alert the spec lists: error rates, stuck outbox and jobs, competing acceptances, expired approvals, failed
+  backups, unusual evidence access, low supply and incident SLA. Worker and backup heartbeats (migration 0009).
+  See [`infra/monitoring/README.md`](infra/monitoring/README.md).
+- **Deployment skeleton (Q67):** non-root images for API/worker/migrations and the admin console, and Kustomize
+  manifests with default-deny networking and Pod Security `restricted`. See [`infra/deploy/README.md`](infra/deploy/README.md).
+- **Accessibility (§16):** automated checks for touch targets, labels, contrast and 200% text on a small phone
+  (Flutter), and axe-core checks on the admin console pages. Screen-reader testing on a real device is still open.
+
 ### Known gaps (tracked for the R1 gate)
 
 - No real SMS vendor (DEC-08). Outside dev, the app refuses to pretend an SMS was sent.
-- Keys come from environment variables (`EnvKeyProvider`). A managed KMS provider is needed before staging.
+- Keys come from environment variables. Field and signing keys are versioned and can be rotated without downtime ([runbook](docs/security/KEY_ROTATION_RUNBOOK.md)), but a managed KMS provider is still needed before staging, and the phone lookup key cannot be rotated yet.
 - Admin TOTP recovery is an operator procedure only, with no self-service yet.
-- New policy versions are created by the operator CLI or SQL as the owner role. An admin API with two-admin approval for policy versions comes later.
-- The race tests use a single Postgres instance and threads. Spec §19 asks for multi-process worker and crash tests before the R1 gate.
 - No real routing or ETA (Q44). Distances are straight-line, are labelled as approximate, and no arrival time is shown.
 - There's no rescheduling or job extension (Q33, Q52), and no on-demand bookings (Q26). Each is either deferred or behind a disabled setting.
 - Operations admins handle disputes and holds through the generic transitions endpoint. A dedicated dispute-adjudication screen comes with the R2 admin web.

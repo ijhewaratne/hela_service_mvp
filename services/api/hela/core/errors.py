@@ -8,6 +8,7 @@ from contextvars import ContextVar
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from prometheus_client import Counter
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .messages import english
@@ -24,7 +25,12 @@ class ApiError(Exception):
         self.retryable, self.details = retryable, details or {}
 
 
+# Error responses by code, e.g. competing acceptances (BOOKING_ALREADY_ASSIGNED, ASSIGNMENT_CONFLICT) for §17 alerts.
+API_ERRORS = Counter('hela_api_errors', 'Error responses by error code', ['code'])
+
+
 def envelope(code: str, message_key: str, *, retryable=False, details=None) -> dict:
+    API_ERRORS.labels(code=code).inc()
     return {'error': {'code': code, 'message_key': message_key, 'message': english(message_key),
                       'correlation_id': correlation_id.get(), 'retryable': retryable,
                       'details': details or {}}}

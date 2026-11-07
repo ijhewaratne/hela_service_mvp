@@ -6,7 +6,7 @@
   --border: #d9dee5;
   --accent: #0b6e4f;
   --accent-text: #ffffff;
-  --danger: #b42318;
+  --danger: #b42318; --danger-text: #ffffff;
   --good-bg: #e3f4ea; --good-fg: #11633f;
   --warn-bg: #fff4d6; --warn-fg: #7a5400;
   --bad-bg: #fde7e5; --bad-fg: #9f1d12;
@@ -18,7 +18,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0f1216; --surface: #171b21; --text: #e7ebf0; --muted: #9aa5b1; --border: #2b323b;
-    --accent: #3fb68b; --accent-text: #08130e; --danger: #f2766b;
+    --accent: #3fb68b; --accent-text: #08130e; --danger: #f2766b; --danger-text: #1a0605;
     --good-bg: #133626; --good-fg: #8be0b6; --warn-bg: #3a2f10; --warn-fg: #f2cf73;
     --bad-bg: #3d1714; --bad-fg: #f6a39a; --neutral-bg: #232a33; --neutral-fg: #c3ccd6; --focus: #6ea8ff;
     color-scheme: dark;
@@ -62,7 +62,7 @@ input, textarea, select { width: 100%; padding: 8px 10px; border: 1px solid var(
 .btn { background: var(--accent); color: var(--accent-text); border: 0; border-radius: 6px; padding: 9px 14px;
   font: inherit; font-weight: 600; cursor: pointer; min-height: 40px; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger { background: var(--danger); color: var(--danger-text); }
 .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
 .reason-action { border-top: 1px dashed var(--border); padding-top: 8px; margin-top: 8px; }

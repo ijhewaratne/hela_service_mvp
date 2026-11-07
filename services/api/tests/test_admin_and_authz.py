@@ -130,7 +130,7 @@ def test_region_scoped_permission(client, make_admin, admin_login, region):
 
 def test_staging_refuses_to_enable_unapproved_region(reset, settings, make_admin, region, cipher):
     rid = region(status='disabled')
-    staging = settings.model_copy(update={'env': 'staging', 'jwt_secret': 's' * 48})
+    staging = settings.model_copy(update={'env': 'staging'})
     with TestClient(create_app(staging)) as c:
         tokens = {}
         for name in ('ops.alice', 'ops.bob'):

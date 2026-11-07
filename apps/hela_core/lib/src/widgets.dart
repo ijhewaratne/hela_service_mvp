@@ -31,17 +31,30 @@ class ErrorBanner extends StatelessWidget {
   }
 }
 
+/// A screen's main heading, announced as a heading so screen-reader users can jump between sections.
+class ScreenTitle extends StatelessWidget {
+  const ScreenTitle(this.text, {super.key});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) =>
+      Semantics(header: true, child: Text(text, style: Theme.of(context).textTheme.headlineSmall));
+}
+
 class InfoBanner extends StatelessWidget {
   const InfoBanner(this.text, {super.key});
   final String text;
 
   @override
-  Widget build(BuildContext context) => Container(
-        margin: const EdgeInsets.symmetric(vertical: 8),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.tertiaryContainer, borderRadius: BorderRadius.circular(8)),
-        child: Text(text, style: TextStyle(color: Theme.of(context).colorScheme.onTertiaryContainer)),
+  Widget build(BuildContext context) => Semantics(
+        container: true,   // read as one block, not merged into the next control
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.tertiaryContainer, borderRadius: BorderRadius.circular(8)),
+          child: Text(text, style: TextStyle(color: Theme.of(context).colorScheme.onTertiaryContainer)),
+        ),
       );
 }
 
@@ -69,13 +82,35 @@ class StatusChip extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final bad = RegExp(r'cancel|disput|hold|unfulfilled|expired|suspend|denied|revoked').hasMatch(v);
     final good = RegExp(r'complet|accepted|approved|confirmed|clean|sent|active').hasMatch(v);
+    // Colour is a hint only; the state is always spelled out, and announced as a status.
     return Chip(
       // Long states ("completed pending confirmation") wrap instead of overflowing narrow phones.
-      label: Text(v.replaceAll('_', ' '), softWrap: true),
+      label: Text(v.replaceAll('_', ' '), softWrap: true, semanticsLabel: '${Strings.of(context).t('common.status')}: ${v.replaceAll('_', ' ')}'),
       backgroundColor: bad ? scheme.errorContainer : good ? scheme.primaryContainer : scheme.surfaceContainerHighest,
       visualDensity: VisualDensity.compact,
     );
   }
+}
+
+/// A list row with a status. The status sits under the text, not at the end of the row: long states such as
+/// "completed pending confirmation" would otherwise take the whole row on a small phone or at large text sizes.
+class StatusTile extends StatelessWidget {
+  const StatusTile({super.key, required this.title, this.subtitle, required this.status, this.onTap});
+  final Widget title;
+  final Widget? subtitle;
+  final String? status;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+        title: title,
+        onTap: onTap,
+        trailing: onTap == null ? null : const Icon(Icons.chevron_right),
+        subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          ?subtitle,
+          Padding(padding: const EdgeInsets.only(top: 4), child: StatusChip(status)),
+        ]),
+      );
 }
 
 /// Loads data once and on demand. Keeps the last good data visible during a refresh.
@@ -116,7 +151,11 @@ class _AsyncSectionState<T> extends State<AsyncSection<T>> {
 
   @override
   Widget build(BuildContext context) {
-    if (_data == null && _loading) return const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()));
+    if (_data == null && _loading) {
+      return Padding(
+          padding: const EdgeInsets.all(24),
+          child: Center(child: CircularProgressIndicator(semanticsLabel: Strings.of(context).t('common.loading'))));
+    }
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       ErrorBanner(_error),
       if (_error != null) TextButton(onPressed: _run, child: Text(Strings.of(context).t('common.retry'))),
@@ -164,7 +203,13 @@ class _ActionButtonState extends State<ActionButton> {
               },
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),
-          child: _busy ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2)) : Text(widget.label),
+          // While busy the button keeps its name for screen readers ("Accept, in progress") instead of going silent.
+          child: _busy
+              ? Semantics(
+                  label: '${widget.label}, ${Strings.of(context).t('common.in_progress')}',
+                  child: const SizedBox(
+                      height: 20, width: 20, child: ExcludeSemantics(child: CircularProgressIndicator(strokeWidth: 2))))
+              : Text(widget.label),
         ),
       ),
       ErrorBanner(_error),
@@ -184,7 +229,7 @@ class LanguageScreen extends StatelessWidget {
     return Scaffold(
       body: SafeArea(
         child: ListView(padding: const EdgeInsets.all(24), children: [
-          Text(title, style: Theme.of(context).textTheme.headlineMedium),
+          Semantics(header: true, child: Text(title, style: Theme.of(context).textTheme.headlineMedium)),
           const SizedBox(height: 8),
           Text(s.t('lang.choose'), style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 16),

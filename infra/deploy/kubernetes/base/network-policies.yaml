@@ -1,0 +1,75 @@
+# Default deny, then allow only the flows the system needs. The CIDRs and namespace labels are placeholders for
+# the platform's managed services and controllers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: hela-api}
+  policyTypes: [Ingress]
+  ingress:
+    - from:   # public traffic only through the ingress controller
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: ingress}
+      ports: [{port: 8000}]
+    - from:   # Prometheus scrapes /internal/metrics on the private network
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: monitoring}
+      ports: [{port: 8000}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: admin-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: hela-admin}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: ingress}
+      ports: [{port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-egress
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: app.kubernetes.io/name, operator: In, values: [hela-api, hela-worker, hela-migrate]}
+  policyTypes: [Egress]
+  egress:
+    - to:   # managed Postgres/PostGIS and Redis (placeholder private range)
+        - ipBlock: {cidr: 10.20.0.0/16}
+      ports: [{protocol: TCP, port: 5432}, {protocol: TCP, port: 6379}]
+    - to:   # S3-compatible evidence storage and the SMS vendor (DEC-08): HTTPS only
+        - ipBlock: {cidr: 0.0.0.0/0}
+      ports: [{protocol: TCP, port: 443}]
+    - to:   # in-cluster ClamAV
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: hela-platform}
+      ports: [{protocol: TCP, port: 3310}]

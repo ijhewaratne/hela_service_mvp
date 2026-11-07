@@ -9,6 +9,15 @@ SOURCE=${1:-hela}
 TARGET=hela_restore_check
 psql_() { docker exec -i "$CONTAINER" psql -U hela_owner -v ON_ERROR_STOP=1 -tA "$@"; }
 
+# Report the outcome to monitoring (HelaBackupFailed / HelaBackupStale alerts). Set HELA_RECORD_HEARTBEAT=0 to skip.
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+heartbeat() {
+  [ "${HELA_RECORD_HEARTBEAT:-1}" = "0" ] && return 0
+  (cd "$ROOT/services/api" && "${HELA_PYTHON:-.venv/bin/python}" -m hela.cli record-heartbeat --name backup \
+      --status "$1" --detail "$2") || echo "warning: could not record the backup heartbeat" >&2
+}
+trap 'rc=$?; [ $rc -ne 0 ] && heartbeat failed "restore check exited with $rc"' EXIT
+
 TABLES="users sessions provider_profiles provider_evidence provider_category_approvals service_requests offers bookings
 booking_assignments booking_events settlements incidents audit_logs audit_chain"
 counts() { for t in $TABLES; do printf '%s=%s ' "$t" "$(psql_ -d "$1" -c "SELECT count(*) FROM $t")"; done; }
@@ -37,3 +46,4 @@ else
 fi
 psql_ -d postgres -c "DROP DATABASE $TARGET WITH (FORCE)" >/dev/null
 docker exec "$CONTAINER" rm -f /tmp/hela_backup.dump
+heartbeat ok "dump+restore $((end - start)) s, $size bytes"

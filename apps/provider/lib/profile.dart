@@ -20,7 +20,7 @@ class _ApplyScreenState extends State<ApplyScreen> {
   @override
   Widget build(BuildContext context) {
     return ListView(padding: const EdgeInsets.all(24), children: [
-      Text('Work with Hela', style: Theme.of(context).textTheme.headlineSmall),
+      ScreenTitle('Work with Hela'),
       const AppNotices(),
       const Text('You must be an adult. A reviewer checks your identity and age against your ID before you can get jobs.'),
       TextField(key: const Key('legal-name'), controller: _name, decoration: const InputDecoration(labelText: 'Legal name (as on your ID)')),
@@ -60,7 +60,7 @@ class ProfileScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(padding: const EdgeInsets.all(16), children: [
-      Text('Profile', style: Theme.of(context).textTheme.headlineSmall),
+      ScreenTitle('Profile'),
       AsyncSection<Map<String, dynamic>>(
         load: () async => await api.get('/v1/provider/me') as Map<String, dynamic>,
         builder: (context, p, reload) {
@@ -68,22 +68,21 @@ class ProfileScreen extends StatelessWidget {
           final approvals = (p['approvals'] as List).cast<Map<String, dynamic>>();
           final state = p['application_state'] as String;
           return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            ListTile(title: const Text('Application'), trailing: StatusChip(state)),
-            ListTile(title: const Text('Account'), trailing: StatusChip(p['account_state'] as String)),
+            StatusTile(title: const Text('Application'), status: state),
+            StatusTile(title: const Text('Account'), status: p['account_state'] as String),
             ListTile(
                 title: const Text('Identity and age'),
                 subtitle: Text(p['identity_verified'] == true ? 'Verified by a reviewer' : 'Not verified yet')),
             const Divider(),
             Text('Documents', style: Theme.of(context).textTheme.titleMedium),
             for (final e in evidence)
-              ListTile(
-                dense: true,
+              StatusTile(
                 title: Text((e['evidence_type'] as String).replaceAll('_', ' ')),
                 subtitle: Text([
                   'scan: ${e['scan_state']}',
                   if (e['review_reason'] != null) 'reviewer: ${e['review_reason']}',
                 ].join(' · ')),
-                trailing: StatusChip(e['review_state'] as String),
+                status: e['review_state'] as String,
               ),
             if (const {'draft', 'needs_more_info', 'submitted', 'approved'}.contains(state))
               UploadEvidenceButton(api: api, onUploaded: reload),
@@ -96,10 +95,10 @@ class ProfileScreen extends StatelessWidget {
             Text('Service categories', style: Theme.of(context).textTheme.titleMedium),
             const Text('Each category is approved separately. Approval for cleaning does not cover any other work.'),
             for (final a in approvals)
-              ListTile(
+              StatusTile(
                 title: Text((a['category_code'] as String).replaceAll('_', ' ')),
                 subtitle: Text(a['valid_until'] == null ? 'policy v${a['policy_version']}' : 'valid until ${formatLocal(a['valid_until'] as String)}'),
-                trailing: StatusChip(a['status'] as String),
+                status: a['status'] as String,
               ),
             RequestCategoryButton(api: api, existing: approvals.map((a) => a['category_code'] as String).toSet(), onDone: reload),
             const Divider(),

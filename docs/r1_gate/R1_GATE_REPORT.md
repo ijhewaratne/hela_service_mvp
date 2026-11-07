@@ -92,7 +92,9 @@ Load: 30 providers, 100 customers, 4 API processes, 2 workers, 40 Locust users (
 | NFR-08 | Never show an unconfirmed accepted state | `booking_id` is shown only once a booking row exists; idempotent retries | | ✅ |
 | NFR-10 | Every privileged action linked to actor, event and policy version | Audit with correlation ID; approvals store `policy_id`; quotes store policy and price versions | | ✅ |
 | NFR-11 | Load test ≥ 10× pilot peak | 50/min = 10× the Q71 target of 5/min | | ✅ |
-| NFR-04, 07, 09, 12, 13 | Uptime, pen test, localisation, accessibility, portability | not measurable in R1 locally | | ❌ open |
+| NFR-12 | Accessibility | Automated: touch targets, labels, contrast and 200% text on a 360 dp phone (Flutter guideline tests); axe-core on 8 admin pages; contrast computed for both admin themes | | 🟡 automated only; TalkBack testing on a device open |
+| NFR-13 | Portability | Cloud-neutral images and Kustomize skeleton, schema-checked; not deployed (Q67) | | 🟡 |
+| NFR-04, 07, 09 | Uptime, pen test, localisation | not measurable in R1 locally | | ❌ open |
 
 **What the load test found and how it was fixed:**
 
@@ -124,11 +126,11 @@ findings fixed during R1 (F-1 to F-7), and the open items. **Not an independent 
 ## 7. Open items before G1 sign-off (engineering)
 
 1. **CI has never run on GitHub**, because there's no remote yet (Q7). The workflow exists, with PostGIS, MinIO, lint, tests, pip-audit, SBOM and gitleaks.
-2. **KMS-backed keys and rotation**; asymmetric JWT signing (V11).
+2. **KMS-backed keys.** Rotation is built: versioned field keys with online re-encryption, and Ed25519 (EdDSA) token signing with key ids ([runbook](../security/KEY_ROTATION_RUNBOOK.md)). The keys themselves still come from environment variables, and the phone lookup key cannot be rotated yet (V11).
 3. ~~Policy-version administration API~~: done (migration 0006).
 4. **Retention periods and deletion** still need DEC-09. The register, legal holds (released only by a second person), the privacy-request workflow and the scoped own-data export are now built (migration 0007). The register is report-only, so nothing is deleted automatically.
 5. **WAL/PITR backups** in the target environment; the restore drill there (NFR-06).
-6. **Central logging and alerting** (§17), and an off-site write-once (WORM) audit export (Q64).
+6. **Central log shipping**, and an off-site write-once (WORM) audit export (Q64). Metrics and the §17 alert rules are built and unit-tested ([`infra/monitoring`](../../infra/monitoring/README.md)); where Prometheus and Alertmanager run, and who is paged, waits for DEC-08.
 7. **Independent security assessment** (NFR-07, §19.1).
 8. Confirm the readings of **AT-012** (shared customer persona) and **AT-030** (no access path exists).
 9. Matching uses straight-line distance only (Q44); no ETA is shown anywhere.
