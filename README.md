@@ -29,7 +29,7 @@
 | M03 Booking engine: addresses, quotes, requests, matching, offers, bookings, settlement, incidents | Done |
 | R1 gate hardening: multi-process/crash tests, load test, backup drill, ASVS self-assessment | **Done**: see [`docs/r1_gate/R1_GATE_REPORT.md`](docs/r1_gate/R1_GATE_REPORT.md) |
 | R2: Flutter customer/provider apps, React admin web | Done: see [`apps/README.md`](apps/README.md). On-device testing is still open |
-| Operations hardening: key rotation, metrics and alerts, deployment skeleton, accessibility checks, write-once audit export, log shipping | Done: see below |
+| Operations hardening: key rotation, metrics and alerts, deployment skeleton, accessibility checks, write-once audit export, log shipping, key service | Done: see below |
 
 ## Run locally (macOS)
 
@@ -149,6 +149,8 @@ address → quote → accept terms → request (beneficiary consent if booking f
   to change, only for the owner, only during a rotation). Access tokens are Ed25519 (EdDSA) with a `kid`, so the
   signing key rotates with a verify-only overlap. `key-status` shows what is left under old keys.
   Phone lookup keys rotate too, with a dual-lookup period and `rotate-lookup-key`.
+  With `HELA_KEY_PROVIDER=transit` every key is wrapped by a key service (OpenBao or Vault transit) and only
+  unwrapped in memory at start-up; `docker compose ... up -d openbao` runs one locally.
   See [`docs/security/KEY_ROTATION_RUNBOOK.md`](docs/security/KEY_ROTATION_RUNBOOK.md).
 - **Write-once audit export (Q64):** `export-audit` copies the sealed chain hourly to an S3 Object Lock bucket in
   chained segments; `verify-audit-export --against-db` detects a rewritten database chain, edited exports and
@@ -167,7 +169,7 @@ address → quote → accept terms → request (beneficiary consent if booking f
 ### Known gaps (tracked for the R1 gate)
 
 - No real SMS vendor (DEC-08). Outside dev, the app refuses to pretend an SMS was sent.
-- Keys come from environment variables. Field, lookup and signing keys are versioned and can be rotated without downtime ([runbook](docs/security/KEY_ROTATION_RUNBOOK.md)). A managed KMS provider is still needed before staging.
+- Keys can be wrapped by a key service (`HELA_KEY_PROVIDER=transit`, OpenBao/Vault, tested locally) and plaintext keys are refused in production; which key service runs there is DEC-08. Field, lookup and signing keys rotate without downtime ([runbook](docs/security/KEY_ROTATION_RUNBOOK.md)).
 - Admin TOTP recovery is an operator procedure only, with no self-service yet.
 - No real routing or ETA (Q44). Distances are straight-line, are labelled as approximate, and no arrival time is shown.
 - There's no rescheduling or job extension (Q33, Q52), and no on-demand bookings (Q26). Each is either deferred or behind a disabled setting.

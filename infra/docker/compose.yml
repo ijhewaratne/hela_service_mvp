@@ -23,6 +23,22 @@ services:
       timeout: 3s
       retries: 40
 
+  openbao:
+    # Local stand-in for a managed key service (Q65): OpenBao, the open-source fork of Vault, with its transit
+    # engine. Dev mode keeps everything in memory and is unsealed with a placeholder root token; local only.
+    image: openbao/openbao:2.4.3
+    command: ["server", "-dev", "-dev-listen-address=0.0.0.0:8200"]
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: ${HELA_TRANSIT_TOKEN:-hela-dev-root-token-only}
+    cap_add: [IPC_LOCK]
+    ports:
+      - "127.0.0.1:58200:8200"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8200/v1/sys/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   redis:
     image: redis:7.4.1-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no"]

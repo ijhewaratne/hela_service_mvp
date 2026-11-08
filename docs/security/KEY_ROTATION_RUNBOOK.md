@@ -1,8 +1,9 @@
 # Key rotation runbook (Q38, Q65)
 
-**Status:** engineering procedure for the synthetic environment. In staging or production, keys must come from a
-managed key service (KMS), not environment variables, and the owner of the key policy must approve this runbook.
-Today only `HELA_KEY_PROVIDER=local` exists; the API refuses to start with any other value instead of falling back.
+**Status:** engineering procedure for the synthetic environment; the owner of the key policy must approve it.
+Two key sources exist: `HELA_KEY_PROVIDER=local` (plaintext keys in environment variables, development only and
+refused in production) and `HELA_KEY_PROVIDER=transit` (keys wrapped by a key service, below). Which key service
+runs in production is DEC-08.
 
 ## What is keyed
 
@@ -109,9 +110,55 @@ been exposed at the same time.
 `verify_only`, then revoke sessions if needed. Every client gets `TOKEN_INVALID` once and refreshes; a stolen token
 signed with the old key stops working immediately.
 
-## What a KMS provider must do
+## Keys wrapped by a key service (`HELA_KEY_PROVIDER=transit`)
 
-Implement `KeyProvider` (`active_field_key`, `field_key`, `active_lookup_key`, `lookup_keys`) and the `SigningKeys` interface in
-`hela/security/keys.py`, for example by keeping the field keys wrapped by a KMS key and unwrapping them at start-up,
-and by signing tokens with a KMS-held Ed25519 key. Register it under a new `HELA_KEY_PROVIDER` value. The rotation
-steps above stay the same.
+With `transit`, the keyrings keep exactly the same JSON shape and key ids, but each key is a **wrapped** value
+(`vault:v1:...`) encrypted by a key-encryption key (KEK) inside a Vault-compatible transit engine: OpenBao, or
+HashiCorp Vault. Each process unwraps the keys once at start-up and keeps them only in memory. Every wrapped key is
+bound to its purpose and id (associated data `hela:field:k2`), so a wrapped lookup key cannot be used as a field
+key and a key cannot be relabelled. Plaintext keys in a ring are refused. If the key service refuses or cannot be
+reached, the API and worker do not start, so revoking the services' access to the KEK is the kill switch for new
+processes.
+
+Settings: `HELA_TRANSIT_ADDR` (HTTPS outside dev/test), `HELA_TRANSIT_TOKEN` or `HELA_TRANSIT_TOKEN_FILE`,
+`HELA_TRANSIT_MOUNT` (default `transit`), `HELA_TRANSIT_KEY` (default `hela-keys`), `HELA_TRANSIT_CA_FILE`.
+
+**Set up the key service** (once, by the key-service administrator):
+
+```bash
+bao secrets enable transit
+bao write -f transit/keys/hela-keys type=aes256-gcm96
+# Policy for the Hela services: use the KEK, nothing else. No export, no deletion, no key configuration.
+bao policy write hela-keys - <<'POLICY'
+path "transit/encrypt/hela-keys" { capabilities = ["update"] }
+path "transit/decrypt/hela-keys" { capabilities = ["update"] }
+POLICY
+```
+
+Bind that policy to the API, worker and CLI identities, preferably with Kubernetes authentication and an agent
+sidecar that writes the token to `HELA_TRANSIT_TOKEN_FILE` (read on every call, so token renewal needs no restart).
+Rotating the KEK (`transit/keys/hela-keys/rotate`) is an administrator action the services cannot perform.
+
+**New keys:** `python -m hela.cli generate-keys --key-id k2 --wrapped` prints only wrapped values and the Ed25519
+public key. Add them to the rings as described in the rotation sections above; the steps do not change.
+
+**Moving from local keys:** with `HELA_KEY_PROVIDER=local` still set and the `HELA_TRANSIT_*` settings added, run
+`wrap-keyring --name field`, then `--name lookup` and `--name jwt`. Each prints the same keyring, with the same key
+ids, wrapped, so existing data stays readable. Store the three outputs, switch to `HELA_KEY_PROVIDER=transit`,
+deploy, then delete the plaintext keys from the secret manager. Treat the old plaintext keys as exposed for as long
+as backups or old secret versions hold them, and rotate field, lookup and signing keys afterwards.
+
+**Rotating the KEK:** the administrator rotates `hela-keys`; then `rewrap-keyring --name field|lookup|jwt` prints
+each ring wrapped under the new KEK version. The transit `rewrap` endpoint does not accept associated data, so the
+CLI unwraps and wraps again in its own memory; plaintext is never printed. Deploy the new values. Old KEK versions
+can be retired (`min_decryption_version`) once no deployed or backed-up secret still uses them.
+
+Tested against OpenBao 2.4.3 locally (`docker compose -f infra/docker/compose.yml up -d openbao`) by
+`tests/test_key_service.py`, which CI runs with the key service required.
+
+## Other key services
+
+A cloud KMS (AWS KMS, Google Cloud KMS, Azure Key Vault) fits the same `KeyWrapper` interface in
+`hela/security/transit.py` (`wrap`, `unwrap`, `rewrap`), using Encrypt/Decrypt with an encryption context in place
+of associated data. Only the transit adapter has been built. Signing tokens inside the key service, instead of
+unwrapping the Ed25519 seed into memory, is a possible later hardening.

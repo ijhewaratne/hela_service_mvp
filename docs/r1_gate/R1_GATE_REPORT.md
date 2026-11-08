@@ -126,7 +126,7 @@ findings fixed during R1 (F-1 to F-7), and the open items. **Not an independent 
 ## 7. Open items before G1 sign-off (engineering)
 
 1. **CI has never run on GitHub**, because there's no remote yet (Q7). The workflow exists, with PostGIS, MinIO, lint, tests, pip-audit, SBOM and gitleaks.
-2. **KMS-backed keys.** Rotation is built: versioned field keys with online re-encryption, and Ed25519 (EdDSA) token signing with key ids ([runbook](../security/KEY_ROTATION_RUNBOOK.md)). The keys themselves still come from environment variables (V11). Lookup keys rotate with a dual-lookup period.
+2. **KMS-backed keys.** Rotation is built: versioned field keys with online re-encryption, and Ed25519 (EdDSA) token signing with key ids ([runbook](../security/KEY_ROTATION_RUNBOOK.md)). Lookup keys rotate with a dual-lookup period. Keys can now be wrapped by a key service (OpenBao/Vault transit, tested locally) and plaintext keys are refused in production; which key service runs there is DEC-08 (V11).
 3. ~~Policy-version administration API~~: done (migration 0006).
 4. **Retention periods and deletion** still need DEC-09. The register, legal holds (released only by a second person), the privacy-request workflow and the scoped own-data export are now built (migration 0007). The register is report-only, so nothing is deleted automatically.
 5. **WAL/PITR backups** in the target environment; the restore drill there (NFR-06).

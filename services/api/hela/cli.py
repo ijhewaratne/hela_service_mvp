@@ -6,7 +6,10 @@
   python -m hela.cli init-storage
   python -m hela.cli expire-verifications
   python -m hela.cli rescan-evidence
-  python -m hela.cli generate-keys
+  python -m hela.cli generate-keys            (local provider: prints base64 keys)
+  python -m hela.cli generate-keys --wrapped  (transit provider: prints only wrapped keys)
+  python -m hela.cli rewrap-keyring --name field   (after rotating the key-encryption key)
+  python -m hela.cli wrap-keyring --name field     (moving from local keys to the key service)
   python -m hela.cli key-status
   python -m hela.cli rotate-field-keys
   python -m hela.cli rotate-lookup-key
@@ -247,12 +250,31 @@ def rescan_evidence(_args) -> int:
 
 
 def generate_keys(args) -> int:
-    """Print fresh key material for a keyring entry. Store it in the secret manager, never in a file in the repo."""
+    """Print fresh key material for a keyring entry. Store it in the secret manager, never in a file in the repo.
+
+    With --wrapped (HELA_KEY_PROVIDER=transit) the new keys are wrapped by the key service before anything is
+    printed, so plaintext keys never reach the terminal.
+    """
     import base64
     import secrets
 
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    if args.wrapped:
+        from .security.keys import _check_id, key_wrapper
+        wrapper = key_wrapper(get_settings())
+        if wrapper is None:
+            print('--wrapped needs HELA_KEY_PROVIDER=transit', file=sys.stderr)
+            return 2
+        kid = _check_id(args.key_id)
+        seed = secrets.token_bytes(32)
+        public = Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        print(json.dumps({
+            'field_key': {kid: wrapper.wrap(secrets.token_bytes(32), purpose='field', key_id=kid)},
+            'lookup_key': {kid: wrapper.wrap(secrets.token_bytes(32), purpose='lookup', key_id=kid)},
+            'jwt_seed': {kid: wrapper.wrap(seed, purpose='jwt', key_id=kid)},
+            'jwt_public_for_verify_only': {kid: base64.b64encode(public).decode()}}, indent=2))
+        return 0
     field = base64.b64encode(secrets.token_bytes(32)).decode()
     seed = secrets.token_bytes(32)
     public = Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
@@ -260,6 +282,45 @@ def generate_keys(args) -> int:
     print(json.dumps({'field_key': {args.key_id: field}, 'lookup_key': {args.key_id: lookup},
                       'jwt_seed': {args.key_id: base64.b64encode(seed).decode()},
                       'jwt_public_for_verify_only': {args.key_id: base64.b64encode(public).decode()}}, indent=2))
+    return 0
+
+
+def rewrap_keyring(args) -> int:
+    """Re-wrap one configured keyring under the newest key-encryption-key version; prints the new keyring JSON."""
+    from .security.keys import key_wrapper
+    settings = get_settings()
+    wrapper = key_wrapper(settings)
+    raw = {'field': settings.field_keyring, 'lookup': settings.lookup_keyring, 'jwt': settings.jwt_keyring}[args.name]
+    if wrapper is None or not raw:
+        print('rewrap-keyring needs HELA_KEY_PROVIDER=transit and the keyring set', file=sys.stderr)
+        return 2
+    doc = json.loads(raw)
+    doc['keys'] = {k: wrapper.rewrap(v, purpose=args.name, key_id=k) for k, v in doc['keys'].items()}
+    print(json.dumps(doc))
+    return 0
+
+
+def wrap_keyring(args) -> int:
+    """Moving from HELA_KEY_PROVIDER=local to transit: wrap the current plaintext keyring (same key ids), so data
+    already encrypted stays readable. Run with key_provider still 'local' and HELA_TRANSIT_* set; prints only
+    wrapped values. Afterwards, remove the plaintext keys from the secret manager."""
+    import base64
+
+    from .security.keys import field_keyring, lookup_keyring
+    from .security.transit import wrapper_from_settings
+    settings = get_settings()
+    if settings.key_provider != 'local':
+        print('wrap-keyring reads the local (plaintext) keyring; run it with HELA_KEY_PROVIDER=local', file=sys.stderr)
+        return 2
+    wrapper = wrapper_from_settings(settings)
+    if args.name == 'jwt':
+        doc = json.loads(settings.effective_jwt_keyring())
+        doc['keys'] = {k: wrapper.wrap(base64.b64decode(v), purpose='jwt', key_id=k) for k, v in doc['keys'].items()}
+    else:
+        ring = (field_keyring if args.name == 'field' else lookup_keyring)(settings)
+        doc = {'active': ring.active,
+               'keys': {k: wrapper.wrap(v, purpose=args.name, key_id=k) for k, v in ring.keys.items()}}
+    print(json.dumps(doc))
     return 0
 
 
@@ -332,7 +393,14 @@ def main(argv=None) -> int:
     sub.add_parser('rescan-evidence').set_defaults(fn=rescan_evidence)
     gk = sub.add_parser('generate-keys')
     gk.add_argument('--key-id', required=True)
+    gk.add_argument('--wrapped', action='store_true', help='wrap with the key service (HELA_KEY_PROVIDER=transit)')
     gk.set_defaults(fn=generate_keys)
+    rw = sub.add_parser('rewrap-keyring')
+    rw.add_argument('--name', choices=['field', 'lookup', 'jwt'], required=True)
+    rw.set_defaults(fn=rewrap_keyring)
+    wk = sub.add_parser('wrap-keyring')
+    wk.add_argument('--name', choices=['field', 'lookup', 'jwt'], required=True)
+    wk.set_defaults(fn=wrap_keyring)
     sub.add_parser('key-status').set_defaults(fn=key_status)
     rk = sub.add_parser('rotate-field-keys')
     rk.add_argument('--batch', type=int, default=200)

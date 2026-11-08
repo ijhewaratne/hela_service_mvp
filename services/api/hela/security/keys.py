@@ -12,10 +12,12 @@ Every ciphertext and every access token names the key that produced it, so keys 
 * Access tokens are signed with Ed25519 (EdDSA) and carry a `kid` header. Retired signing keys stay in the ring as
   verify-only public keys for one access-token lifetime (10 minutes), then are dropped.
 
-Key material here comes from environment variables, which is acceptable only for local development and tests.
-A managed KMS integration implements the same `KeyProvider` / `SigningKeys` interfaces (for example by unwrapping
-data keys with the KMS at start-up) and is selected with `HELA_KEY_PROVIDER`; until one exists, any other value is
-refused rather than silently falling back to environment keys.
+Where the key material comes from is set by `HELA_KEY_PROVIDER`:
+
+* `local`: plaintext base64 keys in environment variables. Development and tests only; refused in production.
+* `transit`: the same keyring JSON, but every key is *wrapped* by a key-encryption key held in a Vault-compatible
+  transit engine (see transit.py). Each process unwraps the keys once at start-up and keeps them in memory only.
+  The environment never holds a usable key.
 """
 from __future__ import annotations
 
@@ -54,20 +56,34 @@ def _check_id(kid: str) -> str:
     return kid
 
 
+def _material(value, what: str, *, purpose: str, key_id: str, wrapper) -> bytes:
+    """Plaintext key bytes: decoded from base64 (local) or unwrapped by the key service (transit)."""
+    if wrapper is None:
+        return _b64_32(value, what)
+    if not isinstance(value, str) or not value.startswith('vault:v'):
+        raise KeyConfigError(f'{what} must be a wrapped value ("vault:v..."); plaintext keys are refused '
+                             'with HELA_KEY_PROVIDER=transit')
+    raw = wrapper.unwrap(value, purpose=purpose, key_id=key_id)
+    if len(raw) != 32:
+        raise KeyConfigError(f'{what} must unwrap to exactly 32 bytes')
+    return raw
+
+
 @dataclass(frozen=True)
 class Keyring:
     active: str
     keys: dict[str, bytes]
 
     @classmethod
-    def parse(cls, raw: str, what: str) -> Keyring:
-        """`{"active": "k2", "keys": {"k1": "<base64 32 bytes>", "k2": "<base64 32 bytes>"}}`"""
+    def parse(cls, raw: str, what: str, *, purpose: str = 'field', wrapper=None) -> Keyring:
+        """`{"active": "k2", "keys": {"k1": "<key>", "k2": "<key>"}}`; a key is base64 (local) or wrapped (transit)."""
         try:
             doc = json.loads(raw)
             active, keys = doc['active'], doc['keys']
         except (ValueError, KeyError, TypeError) as exc:
             raise KeyConfigError(f'{what} must be JSON with "active" and "keys"') from exc
-        parsed = {_check_id(k): _b64_32(v, f'{what} key {k!r}') for k, v in keys.items()}
+        parsed = {_check_id(k): _material(v, f'{what} key {k!r}', purpose=purpose, key_id=k, wrapper=wrapper)
+                  for k, v in keys.items()}
         if active not in parsed:
             raise KeyConfigError(f'{what}: the active key {active!r} is not in the ring')
         return cls(active=active, keys=parsed)
@@ -77,7 +93,7 @@ class Keyring:
 
 
 class KeyProvider(Protocol):
-    """What the field cipher needs. A KMS-backed provider implements the same methods."""
+    """What the field cipher needs."""
 
     def active_field_key(self) -> tuple[str, bytes]: ...
     def field_key(self, key_id: str) -> bytes: ...          # raises KeyError for an unknown or removed key
@@ -85,15 +101,15 @@ class KeyProvider(Protocol):
     def lookup_keys(self) -> dict[str, bytes]: ...          # every lookup key still in the ring, active included
 
 
-class LocalKeyProvider:
-    """Keys held in process memory, loaded from environment variables. Development and tests only."""
+class InMemoryKeyProvider:
+    """Keys held in process memory once loaded, whichever provider supplied them."""
 
     def __init__(self, field: Keyring, lookup: Keyring):
         self._field = field
         self._lookup = lookup
 
     @classmethod
-    def from_settings(cls, settings) -> LocalKeyProvider:
+    def from_settings(cls, settings) -> InMemoryKeyProvider:
         return cls(field_keyring(settings), lookup_keyring(settings))
 
     def active_field_key(self) -> tuple[str, bytes]:
@@ -109,23 +125,56 @@ class LocalKeyProvider:
         return dict(self._lookup.keys)
 
 
+LocalKeyProvider = InMemoryKeyProvider     # name used before the transit provider existed
+
+
+def key_wrapper(settings):
+    """The transit wrapper for `HELA_KEY_PROVIDER=transit`, else None."""
+    if settings.key_provider == 'local':
+        return None
+    if settings.key_provider == 'transit':
+        from .transit import wrapper_from_settings
+        return wrapper_from_settings(settings)
+    raise KeyConfigError(f'Key provider {settings.key_provider!r} is not implemented; refusing to start')
+
+
+@lru_cache(maxsize=16)
+def _keyring(raw: str, what: str, purpose: str, wrapper) -> Keyring:
+    # Cached so each process asks the key service once per keyring, not per request.
+    return Keyring.parse(raw, what, purpose=purpose, wrapper=wrapper)
+
+
+def _require(value, name: str, settings) -> str:
+    if not value:
+        raise KeyConfigError(f'{name} must be set with HELA_KEY_PROVIDER={settings.key_provider}')
+    return value
+
+
 def field_keyring(settings) -> Keyring:
+    wrapper = key_wrapper(settings)
+    if wrapper is not None:
+        return _keyring(_require(settings.field_keyring, 'HELA_FIELD_KEYRING', settings), 'HELA_FIELD_KEYRING',
+                        'field', wrapper)
     if settings.field_keyring:
-        return Keyring.parse(settings.field_keyring, 'HELA_FIELD_KEYRING')
+        return _keyring(settings.field_keyring, 'HELA_FIELD_KEYRING', 'field', None)
     return Keyring(LEGACY_FIELD_KEY_ID, {LEGACY_FIELD_KEY_ID: _b64_32(settings.field_key_b64, 'HELA_FIELD_KEY_B64')})
 
 
 def lookup_keyring(settings) -> Keyring:
+    wrapper = key_wrapper(settings)
+    if wrapper is not None:
+        return _keyring(_require(settings.lookup_keyring, 'HELA_LOOKUP_KEYRING', settings), 'HELA_LOOKUP_KEYRING',
+                        'lookup', wrapper)
     if settings.lookup_keyring:
-        return Keyring.parse(settings.lookup_keyring, 'HELA_LOOKUP_KEYRING')
+        return _keyring(settings.lookup_keyring, 'HELA_LOOKUP_KEYRING', 'lookup', None)
     return Keyring(LEGACY_LOOKUP_KEY_ID,
                    {LEGACY_LOOKUP_KEY_ID: _b64_32(settings.lookup_key_b64, 'HELA_LOOKUP_KEY_B64')})
 
 
 def build_key_provider(settings) -> KeyProvider:
-    if settings.key_provider == 'local':
-        return LocalKeyProvider.from_settings(settings)
-    raise KeyConfigError(f'Key provider {settings.key_provider!r} is not implemented; refusing to start')
+    provider = InMemoryKeyProvider.from_settings(settings)
+    signing_keys(settings)          # load (and, with transit, unwrap) every key at start-up, not on first use
+    return provider
 
 
 @dataclass(frozen=True)
@@ -136,10 +185,11 @@ class SigningKeys:
     dev_material: bool
 
     @classmethod
-    def parse(cls, raw: str) -> SigningKeys:
-        """`{"active": "j2", "keys": {"j2": "<base64 32-byte Ed25519 seed>"}, "verify_only": {"j1": "<base64 public>"}}`
+    def parse(cls, raw: str, wrapper=None) -> SigningKeys:
+        """`{"active": "j2", "keys": {"j2": "<32-byte Ed25519 seed>"}, "verify_only": {"j1": "<base64 public>"}}`
 
-        Only the active signing key needs its private seed; retired keys are listed as public keys.
+        Only the active signing key needs its private seed (base64, or wrapped with transit); retired keys are
+        listed as public keys.
         """
         try:
             doc = json.loads(raw)
@@ -147,7 +197,8 @@ class SigningKeys:
             verify_only = doc.get('verify_only', {})
         except (ValueError, KeyError, TypeError) as exc:
             raise KeyConfigError('HELA_JWT_KEYRING must be JSON with "active" and "keys"') from exc
-        privates = {_check_id(k): _b64_32(v, f'JWT key {k!r}') for k, v in seeds.items()}
+        privates = {_check_id(k): _material(v, f'JWT key {k!r}', purpose='jwt', key_id=k, wrapper=wrapper)
+                    for k, v in seeds.items()}
         if active not in privates:
             raise KeyConfigError(f'HELA_JWT_KEYRING: the active key {active!r} has no private seed')
         public = {k: Ed25519PrivateKey.from_private_bytes(v).public_key() for k, v in privates.items()}
@@ -160,9 +211,12 @@ class SigningKeys:
 
 
 @lru_cache(maxsize=8)
-def _signing_keys(raw: str) -> SigningKeys:
-    return SigningKeys.parse(raw)
+def _signing_keys(raw: str, wrapper) -> SigningKeys:
+    return SigningKeys.parse(raw, wrapper)
 
 
 def signing_keys(settings) -> SigningKeys:
-    return _signing_keys(settings.effective_jwt_keyring())
+    wrapper = key_wrapper(settings)
+    if wrapper is not None:
+        return _signing_keys(_require(settings.jwt_keyring, 'HELA_JWT_KEYRING', settings), wrapper)
+    return _signing_keys(settings.effective_jwt_keyring(), None)

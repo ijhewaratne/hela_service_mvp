@@ -17,7 +17,14 @@ class Settings(BaseSettings):
     redis_url: str = 'redis://127.0.0.1:56379/0'
 
     # Token signing and field encryption (see hela/security/keys.py). Dev defaults are refused outside dev/test.
-    key_provider: Literal['local'] = 'local'    # a managed KMS provider is required before staging (Q65)
+    key_provider: Literal['local', 'transit'] = 'local'   # 'local' is refused in production (Q65)
+    # Key service for key_provider='transit' (OpenBao or Vault transit engine; see hela/security/transit.py).
+    transit_addr: str | None = None
+    transit_token: str | None = None            # or transit_token_file, e.g. written by an agent sidecar
+    transit_token_file: str | None = None
+    transit_mount: str = 'transit'
+    transit_key: str = 'hela-keys'
+    transit_ca_file: str | None = None
     jwt_keyring: str | None = None              # JSON {"active", "keys", "verify_only"}; Ed25519 seeds, base64
     jwt_issuer: str = 'hela-api'
     access_token_minutes: int = 10
@@ -82,11 +89,27 @@ class Settings(BaseSettings):
     @model_validator(mode='after')
     def refuse_dev_secrets_outside_dev(self):
         from ..security.keys import field_keyring, lookup_keyring, signing_keys
-        # Malformed key configuration fails at start-up.
-        jwt_keys, field_keys, lookup_keys = signing_keys(self), field_keyring(self), lookup_keyring(self)
-        if self.env in ('staging', 'production'):
-            if jwt_keys.dev_material or field_keys.has_dev_material() or lookup_keys.has_dev_material():
+        if self.key_provider == 'local':
+            # Malformed key configuration fails at start-up.
+            jwt_keys, field_keys, lookup_keys = signing_keys(self), field_keyring(self), lookup_keyring(self)
+            if self.env in ('staging', 'production') and (
+                    jwt_keys.dev_material or field_keys.has_dev_material() or lookup_keys.has_dev_material()):
                 raise ValueError('Development secrets are not allowed outside dev/test')
+            if self.env == 'production':
+                raise ValueError('HELA_KEY_PROVIDER=local is not allowed in production; use a key service')
+        else:
+            # Wrapped keys are unwrapped when the app starts (build_key_provider), not while reading settings.
+            missing = [n for n, v in (('HELA_TRANSIT_ADDR', self.transit_addr),
+                                      ('HELA_FIELD_KEYRING', self.field_keyring),
+                                      ('HELA_LOOKUP_KEYRING', self.lookup_keyring),
+                                      ('HELA_JWT_KEYRING', self.jwt_keyring)) if not v]
+            if not (self.transit_token or self.transit_token_file):
+                missing.append('HELA_TRANSIT_TOKEN or HELA_TRANSIT_TOKEN_FILE')
+            if missing:
+                raise ValueError(f'HELA_KEY_PROVIDER=transit needs {", ".join(missing)}')
+            if self.env in ('staging', 'production') and not self.transit_addr.startswith('https://'):
+                raise ValueError('The key service must be reached over HTTPS outside dev/test')
+        if self.env in ('staging', 'production'):
             if 'dev_s3_secret_only' in self.s3_secret_key:
                 raise ValueError('Development storage credentials are not allowed outside dev/test')
             if self.dev_inbox_token:

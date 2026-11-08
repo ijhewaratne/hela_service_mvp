@@ -1,7 +1,8 @@
 # Non-secret settings only. Secrets come from a Secret named hela-secrets that the platform's secret manager
 # creates (for example through an External Secrets operator). It must define:
-#   HELA_DATABASE_URL, HELA_REDIS_URL, HELA_S3_ACCESS_KEY, HELA_S3_SECRET_KEY, HELA_FIELD_KEYRING,
-#   HELA_LOOKUP_KEYRING, HELA_JWT_KEYRING, HELA_METRICS_TOKEN
+#   HELA_DATABASE_URL, HELA_REDIS_URL, HELA_S3_ACCESS_KEY, HELA_S3_SECRET_KEY, HELA_METRICS_TOKEN,
+#   HELA_FIELD_KEYRING, HELA_LOOKUP_KEYRING, HELA_JWT_KEYRING (wrapped values only: "vault:v..."), and
+#   HELA_TRANSIT_TOKEN, unless an agent sidecar writes the token to HELA_TRANSIT_TOKEN_FILE
 # and, for the migration job only, a Secret hela-migration with HELA_MIGRATION_DATABASE_URL; for the audit export
 # job only, a Secret hela-audit-export with HELA_S3_ACCESS_KEY / HELA_S3_SECRET_KEY for a write-only identity.
 # Never commit a Secret manifest with values.
@@ -11,6 +12,9 @@ metadata:
   name: hela-config
 data:
   HELA_ENV: staging
+  HELA_KEY_PROVIDER: transit           # keys are wrapped by the key service; see docs/security/KEY_ROTATION_RUNBOOK.md
+  HELA_TRANSIT_ADDR: https://openbao.hela-platform.svc:8200
+  HELA_TRANSIT_KEY: hela-keys
   HELA_S3_ENDPOINT: https://objects.example.invalid
   HELA_S3_BUCKET: hela-evidence
   HELA_AUDIT_EXPORT_BUCKET: hela-audit-export
