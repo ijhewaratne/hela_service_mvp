@@ -88,50 +88,78 @@ void main() {
         {'quote_id': quote['quote_id'], 'task_codes': ['dusting', 'tidying']}, HelaApi.newIdempotencyKey())
         as Map<String, dynamic>;
 
-    // P01–P04: the provider signs in to the real app with the code from the sandbox SMS inbox.
-    final api = HelaApi(store: MemoryTokenStore());
-    await tester.pumpWidget(ProviderApp(api: api, showMaps: false, offerPoll: const Duration(seconds: 2)));
-    await pumpUntil(tester, find.byKey(const Key('lang-en')));
-    await tapAndWait(tester, find.byKey(const Key('lang-en')), find.byKey(const Key('phone')));
-    await tester.enterText(find.byKey(const Key('phone')), providerPhone);
-    await tapAndWait(tester, find.byKey(const Key('send-code')), find.byKey(const Key('dev-fill')));
-    await tester.tap(find.byKey(const Key('dev-fill')));
-    final codeField = find.byKey(const Key('code'));
-    final end = DateTime.now().add(const Duration(seconds: 10));
-    while (tester.widget<TextField>(codeField).controller!.text.length != 6 && DateTime.now().isBefore(end)) {
-      await tester.pump(const Duration(milliseconds: 200));
+    Future<String?> bookingOf() async => ((await customer.get('/v1/requests') as List).cast<Map<String, dynamic>>()
+        .firstWhere((r) => r['request_id'] == request['request_id']))['booking_id'] as String?;
+    try {
+      // P01–P04: the provider signs in to the real app with the code from the sandbox SMS inbox.
+      final api = HelaApi(store: MemoryTokenStore());
+      await tester.pumpWidget(ProviderApp(api: api, showMaps: false, offerPoll: const Duration(seconds: 2)));
+      await pumpUntil(tester, find.byKey(const Key('lang-en')));
+      await tapAndWait(tester, find.byKey(const Key('lang-en')), find.byKey(const Key('phone')));
+      await tester.enterText(find.byKey(const Key('phone')), providerPhone);
+      await tapAndWait(tester, find.byKey(const Key('send-code')), find.byKey(const Key('dev-fill')));
+      await tester.tap(find.byKey(const Key('dev-fill')));
+      final codeField = find.byKey(const Key('code'));
+      final end = DateTime.now().add(const Duration(seconds: 10));
+      while (tester.widget<TextField>(codeField).controller!.text.length != 6 && DateTime.now().isBefore(end)) {
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+      await tapAndWait(tester, find.byKey(const Key('verify')), find.text('Job offers'));
+      await acceptNotices(tester, api);
+
+      // P05: the worker's offer appears with a countdown and without the address (FR-LOC-03).
+      final ours = (await customer.get('/v1/requests') as List).cast<Map<String, dynamic>>()
+          .firstWhere((r) => r['request_id'] == request['request_id']);
+      final window = '${formatLocal(ours['start_at'] as String)} – ${formatLocal(ours['end_at'] as String)}';
+      final offerCard = find.ancestor(
+          of: find.text(window),
+          matching: find.byWidgetPredicate((w) => w.key is ValueKey<String> &&
+              (w.key! as ValueKey<String>).value.startsWith('offer-')));
+      await pumpUntil(tester, offerCard, timeout: const Duration(seconds: 45));
+      expect(find.descendant(of: offerCard.first, matching: find.byKey(const Key('countdown'))), findsOneWidget);
+      expect(find.textContaining('E2E Synthetic Lane'), findsNothing);
+
+      // P06: accept; the job screen shows the address only now.
+      final accept = find.descendant(of: offerCard.first, matching: find.widgetWithText(FilledButton, 'Accept'));
+      await tapAndWait(tester, accept, find.byKey(const Key('address')));
+      expect(find.textContaining('11 E2E Synthetic Lane'), findsOneWidget);
+
+      // P07, P08: on the way, arrived, then the check-in code the customer reads out from their app.
+      await tapAndWait(tester, button('I am on my way'), button('I have arrived'));
+      await tapAndWait(tester, button('I have arrived'), find.byKey(const Key('checkin-pin')));
+      final bookingId = await bookingOf();
+      final view = await customer.get('/v1/bookings/$bookingId') as Map<String, dynamic>;
+      expect(view['status'], 'arrived');
+      await tester.enterText(find.byKey(const Key('checkin-pin')), view['checkin_pin'] as String);
+      await tapAndWait(tester, button('Start work'), button('Work is finished'));
+
+      // P09: finished; the customer confirms over HTTP, which also leaves the provider free for the next run.
+      await tapAndWait(tester, button('Work is finished'), find.text('completed pending confirmation'));
+      final done = await customer.get('/v1/bookings/$bookingId') as Map<String, dynamic>;
+      expect(done['status'], 'completed_pending_confirmation');
+    } finally {
+      // Clean up even after a failure, so the next run finds the provider free.
+      // Clean-up errors are printed, never thrown: they must not hide the failure that got us here.
+      try {
+        final id = await bookingOf();
+        if (id == null) {
+          await customer.post('/v1/requests/${request['request_id']}/cancel', {'reason': 'End-to-end test clean-up'});
+        } else {
+          final b = await customer.get('/v1/bookings/$id') as Map<String, dynamic>;
+          final target = switch (b['status']) {
+            'completed_pending_confirmation' => 'completed',     // the customer confirms the finished job
+            'accepted' || 'en_route' || 'arrived' => 'cancelled',
+            _ => null,
+          };
+          if (target != null) {
+            await customer.post('/v1/bookings/$id/transitions', {
+              'target_status': target, 'expected_version': b['version'], 'reason': 'End-to-end test clean-up',
+            }, HelaApi.newIdempotencyKey());
+          }
+        }
+      } catch (e) {
+        debugPrint('E2E clean-up failed: $e');
+      }
     }
-    await tapAndWait(tester, find.byKey(const Key('verify')), find.text('Job offers'));
-    await acceptNotices(tester, api);
-
-    // P05: the worker's offer appears with a countdown and without the address (FR-LOC-03).
-    final offerCard = find.byWidgetPredicate((w) => w.key is ValueKey<String> &&
-        (w.key! as ValueKey<String>).value.startsWith('offer-'));
-    await pumpUntil(tester, offerCard, timeout: const Duration(seconds: 45));
-    expect(find.descendant(of: offerCard.first, matching: find.byKey(const Key('countdown'))), findsOneWidget);
-    expect(find.textContaining('E2E Synthetic Lane'), findsNothing);
-
-    // P06: accept; the job screen shows the address only now.
-    final accept = find.descendant(of: offerCard.first, matching: find.widgetWithText(FilledButton, 'Accept'));
-    await tapAndWait(tester, accept, find.byKey(const Key('address')));
-    expect(find.textContaining('11 E2E Synthetic Lane'), findsOneWidget);
-
-    // P07, P08: on the way, arrived, then the check-in code the customer reads out from their app.
-    await tapAndWait(tester, button('I am on my way'), button('I have arrived'));
-    await tapAndWait(tester, button('I have arrived'), find.byKey(const Key('checkin-pin')));
-    final mine = (await customer.get('/v1/requests') as List).cast<Map<String, dynamic>>();
-    final bookingId = mine.firstWhere((r) => r['request_id'] == request['request_id'])['booking_id'] as String;
-    final view = await customer.get('/v1/bookings/$bookingId') as Map<String, dynamic>;
-    expect(view['status'], 'arrived');
-    await tester.enterText(find.byKey(const Key('checkin-pin')), view['checkin_pin'] as String);
-    await tapAndWait(tester, button('Start work'), button('Work is finished'));
-
-    // P09: finished; the customer confirms over HTTP, which also leaves the provider free for the next run.
-    await tapAndWait(tester, button('Work is finished'), find.text('completed pending confirmation'));
-    final done = await customer.get('/v1/bookings/$bookingId') as Map<String, dynamic>;
-    expect(done['status'], 'completed_pending_confirmation');
-    await customer.post('/v1/bookings/$bookingId/transitions', {
-      'target_status': 'completed', 'expected_version': done['version'], 'reason': '',
-    }, HelaApi.newIdempotencyKey());
   }, timeout: const Timeout(Duration(minutes: 4)));
 }

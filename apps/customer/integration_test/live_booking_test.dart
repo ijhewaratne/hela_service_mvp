@@ -120,32 +120,49 @@ void main() {
     expect(find.textContaining('This is not confirmed yet'), findsOneWidget);
     expect(find.byKey(const Key('open-booking')), findsNothing);
 
-    // The real worker dispatches an offer; the real provider accepts it.
-    final provider = await signInOverHttp(providerPhone);
-    List offers = [];
-    final offerDeadline = DateTime.now().add(const Duration(seconds: 30));
-    while (offers.isEmpty && DateTime.now().isBefore(offerDeadline)) {
-      await tester.pump(const Duration(milliseconds: 500));
-      offers = await provider.get('/v1/offers/me') as List;
+    // This run's request (newest first). Offers carry no request id, so the provider side matches on start time.
+    final mine = (await api.get('/v1/requests') as List).first as Map<String, dynamic>;
+    String? bookingId;
+    try {
+      // The real worker dispatches an offer; the real provider accepts it.
+      final provider = await signInOverHttp(providerPhone);
+      List<Map<String, dynamic>> offers = [];
+      final offerDeadline = DateTime.now().add(const Duration(seconds: 30));
+      while (offers.isEmpty && DateTime.now().isBefore(offerDeadline)) {
+        await tester.pump(const Duration(milliseconds: 500));
+        offers = (await provider.get('/v1/offers/me') as List).cast<Map<String, dynamic>>()
+            .where((o) => o['start_at'] == mine['start_at'])
+            .toList();
+      }
+      expect(offers, isNotEmpty, reason: 'the worker did not dispatch an offer to the synthetic provider');
+      final offer = offers.first;
+      expect(offer.containsKey('address'), isFalse);                   // no address before acceptance
+      final accepted = await provider.post('/v1/offers/${offer['id']}/accept', null, HelaApi.newIdempotencyKey())
+          as Map<String, dynamic>;
+      bookingId = accepted['booking_id'] as String;
+
+      // C09: the app picks up the booking on its next poll and shows the check-in code.
+      await pumpUntil(tester, find.byKey(const Key('open-booking')));
+      await tapAndWait(tester, find.byKey(const Key('open-booking')), find.byKey(const Key('pin')));
+      final pin = tester.widget<Text>(find.byKey(const Key('pin'))).data!;
+      expect(RegExp(r'^\d{4}$').hasMatch(pin), isTrue);
+      final view = await api.get('/v1/bookings/$bookingId') as Map<String, dynamic>;
+      expect(view['checkin_pin'], pin);                                 // the app shows what the server issued
+    } finally {
+      // Clean up even after a failure, so the next run finds the provider free: the customer cancels.
+      // Clean-up errors are printed, never thrown: they must not hide the failure that got us here.
+      try {
+        if (bookingId != null) {
+          final view = await api.get('/v1/bookings/$bookingId') as Map<String, dynamic>;
+          await api.post('/v1/bookings/$bookingId/transitions', {
+            'target_status': 'cancelled', 'expected_version': view['version'], 'reason': 'End-to-end test clean-up',
+          }, HelaApi.newIdempotencyKey());
+        } else {
+          await api.post('/v1/requests/${mine['request_id']}/cancel', {'reason': 'End-to-end test clean-up'});
+        }
+      } catch (e) {
+        debugPrint('E2E clean-up failed: $e');
+      }
     }
-    expect(offers, isNotEmpty, reason: 'the worker did not dispatch an offer to the synthetic provider');
-    final offer = offers.first as Map<String, dynamic>;
-    expect(offer.containsKey('address'), isFalse);                   // no address before acceptance
-    final accepted = await provider.post('/v1/offers/${offer['id']}/accept', null, HelaApi.newIdempotencyKey())
-        as Map<String, dynamic>;
-    final bookingId = accepted['booking_id'] as String;
-
-    // C09: the app picks up the booking on its next poll and shows the check-in code.
-    await pumpUntil(tester, find.byKey(const Key('open-booking')));
-    await tapAndWait(tester, find.byKey(const Key('open-booking')), find.byKey(const Key('pin')));
-    final pin = tester.widget<Text>(find.byKey(const Key('pin'))).data!;
-    expect(RegExp(r'^\d{4}$').hasMatch(pin), isTrue);
-    final view = await api.get('/v1/bookings/$bookingId') as Map<String, dynamic>;
-    expect(view['checkin_pin'], pin);                                 // the app shows what the server issued
-
-    // Clean up so the next run finds the provider free: the customer cancels.
-    await api.post('/v1/bookings/$bookingId/transitions', {
-      'target_status': 'cancelled', 'expected_version': view['version'], 'reason': 'End-to-end test clean-up',
-    }, HelaApi.newIdempotencyKey());
   }, timeout: const Timeout(Duration(minutes: 4)));
 }
