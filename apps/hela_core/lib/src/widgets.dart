@@ -15,7 +15,7 @@ class ErrorBanner extends StatelessWidget {
     final e = error;
     final s = Strings.of(context);
     final text = e is ApiException
-        ? '${e.code == 'OFFLINE' ? s.t('error.offline') : e.message}'
+        ? '${e.code == 'OFFLINE' ? s.t(e.messageKey) : e.message}'
             '${e.reasonCodes.isEmpty ? '' : ' (${e.reasonCodes.join(', ')})'}\n${s.t('common.ref')}: ${e.correlationId}'
         : e.toString();
     return Semantics(

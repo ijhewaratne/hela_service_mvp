@@ -83,7 +83,7 @@ class _CustomerAppState extends State<CustomerApp> {
                 _start();
               },
               onChooseAccount: () async {
-                await widget.api.signOutLocally();
+                await widget.api.forgetSession();   // ends it on the server too, now or once back online
                 if (mounted) setState(() => _stage = _Stage.signIn);
               }),
           _Stage.signIn => PhoneSignInScreen(

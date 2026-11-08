@@ -21,9 +21,13 @@ class ApiException implements Exception {
   final Map<String, dynamic> details;
 
   /// Network failure: no server answer. The app must never assume the action happened (NFR-08).
-  factory ApiException.offline() =>
-      ApiException(0, 'OFFLINE', 'error.offline',
+  /// [command] is true for anything that can change state (POST, PUT, PATCH, DELETE, uploads): its outcome is
+  /// unknown, so the app must check before retrying. A failed read changed nothing and can simply be retried.
+  factory ApiException.offline({bool command = true}) => command
+      ? ApiException(0, 'OFFLINE', 'error.offline_uncertain',
           'Connection lost. The action may have reached the server. Check the latest status before retrying.',
+          '-', true, const {})
+      : ApiException(0, 'OFFLINE', 'error.offline', 'No connection. Check your connection and try again.',
           '-', true, const {});
 
   List<String> get reasonCodes => (details['reason_codes'] as List?)?.cast<String>() ?? const [];
@@ -80,7 +84,7 @@ class HelaApi {
       return http.Response.fromStream(await _http.send(req).timeout(timeout));
     }
 
-    return _handle(await _guard(attempt), () async => _handle(await _guard(attempt), null));
+    return _handle(await _guard(attempt, command: true), () async => _handle(await _guard(attempt, command: true), null));
   }
 
   Future<dynamic> _send(String method, String path, {Object? body, String? idempotencyKey}) async {
@@ -94,16 +98,18 @@ class HelaApi {
       return _http.send(req).timeout(timeout).then(http.Response.fromStream);
     }
 
-    return _handle(await _guard(attempt), () async => _handle(await _guard(attempt), null));
+    final command = method != 'GET';
+    return _handle(await _guard(attempt, command: command),
+        () async => _handle(await _guard(attempt, command: command), null));
   }
 
-  Future<http.Response> _guard(Future<http.Response> Function() attempt) async {
+  Future<http.Response> _guard(Future<http.Response> Function() attempt, {required bool command}) async {
     try {
       return await attempt();
     } on TimeoutException {
-      throw ApiException.offline();
+      throw ApiException.offline(command: command);
     } on http.ClientException {
-      throw ApiException.offline();
+      throw ApiException.offline(command: command);
     }
   }
 
@@ -193,6 +199,7 @@ class HelaApi {
   Future<void> _adopt(Map<String, dynamic> tokens) async {
     _access = tokens['access_token'] as String;
     await store.writeRefreshToken(tokens['refresh_token'] as String);
+    unawaited(revokePendingSessions());   // the connection works again: end sessions left while offline
   }
 
   // --- auth (FR-ID-01) ---------------------------------------------------------------------------------------
@@ -210,6 +217,49 @@ class HelaApi {
       await post('/v1/auth/logout');
     } finally {
       await signOutLocally();
+    }
+  }
+
+  /// "Sign in with a different number": ends the saved session on the server as well, not only on this device.
+  /// If the server cannot be reached now, the token is kept aside and revoked once a connection works again.
+  Future<void> forgetSession() async {
+    final refresh = await store.readRefreshToken();
+    if (refresh != null) {
+      final pending = (await store.readPendingRevocations()).where((t) => t != refresh).toList();
+      // Bounded: a token older than the session lifetime is dead anyway.
+      await store.writePendingRevocations([...pending.skip(pending.length > 9 ? pending.length - 9 : 0), refresh]);
+    }
+    await signOutLocally();
+    await revokePendingSessions();
+  }
+
+  bool _revoking = false;
+
+  /// Asks the server to end the sessions in [TokenStore.readPendingRevocations]. A token is dropped once the
+  /// server has answered (204, or a 4xx: unusable anyway) and kept after a timeout, 429 or 5xx.
+  Future<void> revokePendingSessions() async {
+    if (_revoking) return;
+    _revoking = true;
+    try {
+      final pending = await store.readPendingRevocations();
+      if (pending.isEmpty) return;
+      final left = <String>[];
+      for (final token in pending) {
+        try {
+          final res = await _http
+              .post(Uri.parse('$base/v1/auth/revoke'),
+                  headers: {'Content-Type': 'application/json'}, body: jsonEncode({'refresh_token': token}))
+              .timeout(timeout);
+          if (res.statusCode == 408 || res.statusCode == 429 || res.statusCode >= 500) left.add(token);
+        } catch (_) {
+          left.add(token);
+        }
+      }
+      // Re-read: forgetSession may have added a token while this ran.
+      final now = await store.readPendingRevocations();
+      await store.writePendingRevocations(now.where((t) => left.contains(t) || !pending.contains(t)).toList());
+    } finally {
+      _revoking = false;
     }
   }
 

@@ -112,6 +112,24 @@ def test_logout_revokes_access_token_immediately(client, login):
     assert client.get('/v1/me', headers=bearer(tokens)).status_code == 401
 
 
+def test_revoke_by_refresh_token_ends_session_without_an_access_token(client, login, db):
+    tokens = login()
+    other = login(device='second-device')   # same account, another session: must stay signed in
+    rotated = client.post('/v1/auth/refresh', json={'refresh_token': tokens['refresh_token']}).json()
+
+    # A stale (already rotated) token still identifies the session, so a device that missed a rotation can
+    # still end it. No access token is needed; the answer is always 204.
+    assert client.post('/v1/auth/revoke', json={'refresh_token': tokens['refresh_token']}).status_code == 204
+    assert client.get('/v1/me', headers=bearer(rotated)).json()['error']['code'] == 'SESSION_REVOKED'
+    assert client.post('/v1/auth/refresh', json={'refresh_token': rotated['refresh_token']}).status_code == 401
+    assert client.get('/v1/me', headers=bearer(other)).status_code == 200
+
+    # Unknown, repeated and already-revoked tokens look the same from outside.
+    assert client.post('/v1/auth/revoke', json={'refresh_token': 'x' * 40}).status_code == 204
+    assert client.post('/v1/auth/revoke', json={'refresh_token': tokens['refresh_token']}).status_code == 204
+    assert len(db("SELECT 1 FROM audit_logs WHERE action = 'session.revoked_by_client'")) == 1
+
+
 def test_logout_all_and_session_listing(client, login):
     phone_a = login(device='phone-a')
     phone_b = login(device='phone-b')

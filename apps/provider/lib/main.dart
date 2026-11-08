@@ -85,7 +85,7 @@ class _ProviderAppState extends State<ProviderApp> {
                 _start();
               },
               onChooseAccount: () async {
-                await widget.api.signOutLocally();
+                await widget.api.forgetSession();   // ends it on the server too, now or once back online
                 if (mounted) setState(() => _stage = _Stage.signIn);
               }),
           _Stage.signIn => PhoneSignInScreen(
@@ -142,6 +142,15 @@ class _ProviderHomeState extends State<ProviderHome> {
         _checked = true;
         _profile = null;
         _error = e.code == 'PROVIDER_NOT_FOUND' ? null : e;
+      });
+    } catch (_) {
+      // Anything else (an unexpected response shape, a client bug) must not leave the spinner up forever, and
+      // must not look like "no profile" either. Raw error text is not shown: it can contain response content.
+      if (!mounted) return;
+      setState(() {
+        _checked = true;
+        _profile = null;
+        _error = ApiException(0, 'UNEXPECTED', 'error.unexpected', 'Something went wrong. Try again.', '-', true, const {});
       });
     }
   }

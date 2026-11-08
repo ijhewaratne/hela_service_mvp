@@ -174,6 +174,18 @@ def logout(user: UserPrincipal = Depends(current_user), svc: Services = Depends(
                      entity_type='session', entity_id=user.session_id)
 
 
+@router.post('/auth/revoke', status_code=204)
+def revoke(body: RefreshIn, svc: Services = Depends(services)):
+    """Ends a session using only its refresh token, for a device that cannot get an access token (for example
+    "sign in with a different number" while the saved session could not be checked). Always 204, so the
+    response says nothing about whether the token was valid."""
+    with tx(svc.engine) as con:
+        ended = sessions.revoke_by_refresh_token(con, body.refresh_token, 'user', 'client_revoke')
+        if ended:
+            audit.record(con, actor_type='user', actor_id=ended[1], action='session.revoked_by_client',
+                         entity_type='session', entity_id=ended[0])
+
+
 @router.post('/auth/logout-all', status_code=200)
 def logout_all(user: UserPrincipal = Depends(current_user), svc: Services = Depends(services)):
     with tx(svc.engine) as con:
