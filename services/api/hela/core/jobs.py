@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import Connection, Engine
 
 from .db import many, run, tx
+from .logs import safe_error
 
 log = logging.getLogger('hela.jobs')
 Handler = Callable[[Connection, dict], None]
@@ -72,5 +73,5 @@ def run_due(engine: Engine, handlers: dict[str, Handler], *, worker: str | None 
                 run(con, '''UPDATE jobs SET status = :s, last_error = :e, locked_until = NULL, updated_at = now(),
                             run_at = now() + make_interval(secs => least(300, 5 * power(2, attempts)))
                             WHERE id = :id''',
-                    s='dead' if dead else 'queued', e=f'{type(exc).__name__}: {str(exc)[:300]}', id=job['id'])
+                    s='dead' if dead else 'queued', e=safe_error(exc), id=job['id'])
     return len(jobs)

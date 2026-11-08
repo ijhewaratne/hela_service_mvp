@@ -1,0 +1,18 @@
+# Node log agent for the Hela namespace (Q64). Platform-level: deployed once per cluster, separately from the app
+# (kubectl apply -k infra/deploy/logging). Not connected to any cluster or log store (DEC-08 pending).
+# The Secret hela-log-sink (HELA_LOG_SINK_TOKEN) is created by the platform's secret manager; never commit it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hela-platform
+labels:
+  - pairs: {app.kubernetes.io/part-of: hela}
+    includeSelectors: false
+resources:
+  - vector-agent.yaml
+configMapGenerator:
+  - name: vector-config
+    files: [vector.yaml]
+images:
+  - name: vector
+    newName: timberio/vector
+    newTag: 0.46.1-distroless-libc

@@ -31,6 +31,7 @@ from ..core.errors import ApiError
 from ..core.services import Services
 
 log = logging.getLogger('hela.metrics')
+access_log = logging.getLogger('hela.access')
 
 HTTP_REQUESTS = Counter('hela_http_requests', 'HTTP requests handled', ['method', 'route', 'status_class'])
 HTTP_LATENCY = Histogram('hela_http_request_duration_seconds', 'HTTP request latency', ['route'],
@@ -178,7 +179,13 @@ def install(app: FastAPI, svc: Services) -> None:
         route = request.scope.get('route')
         template = getattr(route, 'path', None) or 'unmatched'
         HTTP_REQUESTS.labels(method=request.method, route=template, status_class=f'{response.status_code // 100}xx').inc()
-        HTTP_LATENCY.labels(route=template).observe(time.perf_counter() - started)
+        elapsed = time.perf_counter() - started
+        HTTP_LATENCY.labels(route=template).observe(elapsed)
+        # The access log (replaces uvicorn's): route template, not the raw path; no client IP or query string.
+        quiet = template in ('/health', '/internal/metrics')
+        access_log.log(logging.DEBUG if quiet else logging.INFO, 'request', extra={
+            'http_method': request.method, 'route': template, 'status': response.status_code,
+            'duration_ms': round(elapsed * 1000, 1), 'request_correlation_id': response.headers.get('X-Correlation-ID')})
         return response
 
     token = svc.settings.metrics_token

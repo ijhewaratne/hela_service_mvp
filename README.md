@@ -29,7 +29,7 @@
 | M03 Booking engine: addresses, quotes, requests, matching, offers, bookings, settlement, incidents | Done |
 | R1 gate hardening: multi-process/crash tests, load test, backup drill, ASVS self-assessment | **Done**: see [`docs/r1_gate/R1_GATE_REPORT.md`](docs/r1_gate/R1_GATE_REPORT.md) |
 | R2: Flutter customer/provider apps, React admin web | Done: see [`apps/README.md`](apps/README.md). On-device testing is still open |
-| Operations hardening: key rotation, metrics and alerts, deployment skeleton, accessibility checks, write-once audit export | Done: see below |
+| Operations hardening: key rotation, metrics and alerts, deployment skeleton, accessibility checks, write-once audit export, log shipping | Done: see below |
 
 ## Run locally (macOS)
 
@@ -157,6 +157,8 @@ address → quote → accept terms → request (beneficiary consent if booking f
   each alert the spec lists: error rates, stuck outbox and jobs, competing acceptances, expired approvals, failed
   backups, unusual evidence access, low supply and incident SLA. Worker and backup heartbeats (migration 0009).
   See [`infra/monitoring/README.md`](infra/monitoring/README.md).
+- **Log shipping (Q64):** JSON logs on stdout with correlation ids, masked in the app and again in the Vector
+  collector; database errors keep only their SQLSTATE. See [`infra/deploy/logging/README.md`](infra/deploy/logging/README.md).
 - **Deployment skeleton (Q67):** non-root images for API/worker/migrations and the admin console, and Kustomize
   manifests with default-deny networking and Pod Security `restricted`. See [`infra/deploy/README.md`](infra/deploy/README.md).
 - **Accessibility (§16):** automated checks for touch targets, labels, contrast and 200% text on a small phone

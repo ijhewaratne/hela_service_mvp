@@ -130,7 +130,7 @@ findings fixed during R1 (F-1 to F-7), and the open items. **Not an independent 
 3. ~~Policy-version administration API~~: done (migration 0006).
 4. **Retention periods and deletion** still need DEC-09. The register, legal holds (released only by a second person), the privacy-request workflow and the scoped own-data export are now built (migration 0007). The register is report-only, so nothing is deleted automatically.
 5. **WAL/PITR backups** in the target environment; the restore drill there (NFR-06).
-6. **Central log shipping** (Q64). The write-once audit export is built and tested against local MinIO with Object Lock ([runbook](../security/AUDIT_EXPORT_RUNBOOK.md)); the real bucket and retention period wait for DEC-08 and DEC-09. Metrics and the §17 alert rules are built and unit-tested ([`infra/monitoring`](../../infra/monitoring/README.md)); where Prometheus and Alertmanager run, and who is paged, waits for DEC-08.
+6. **Where logs and audit exports are stored** (Q64). Structured, masked logs and a tested collector pipeline are built ([logging](../../infra/deploy/logging/README.md)). The write-once audit export is built and tested against local MinIO with Object Lock ([runbook](../security/AUDIT_EXPORT_RUNBOOK.md)); the real bucket and retention period wait for DEC-08 and DEC-09. Metrics and the §17 alert rules are built and unit-tested ([`infra/monitoring`](../../infra/monitoring/README.md)); where Prometheus and Alertmanager run, and who is paged, waits for DEC-08.
 7. **Independent security assessment** (NFR-07, §19.1).
 8. Confirm the readings of **AT-012** (shared customer persona) and **AT-030** (no access path exists).
 9. Matching uses straight-line distance only (Q44); no ETA is shown anywhere.

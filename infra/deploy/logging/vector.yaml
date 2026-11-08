@@ -1,0 +1,72 @@
+# Log collector for the Hela namespace (Q64, NFR-12). Runs as a node agent (see kubernetes/vector-agent.yaml).
+# The applications write one JSON object per line to stdout (hela/core/logs.py) and already mask personal data;
+# this pipeline parses those lines, applies the same masks again for anything that slipped through (or came from
+# another process), drops payload, header and cookie fields if any appear, and ships to the platform's log store.
+# The destination (Loki, OpenSearch, a cloud logging service) is DEC-08; the sink below is a placeholder.
+
+data_dir: /var/lib/vector
+
+sources:
+  hela_pods:
+    type: kubernetes_logs
+    extra_namespace_label_selector: kubernetes.io/metadata.name=hela
+
+transforms:
+  hela_parse:
+    type: remap
+    inputs: [hela_pods]
+    source: |
+      raw = to_string(.message) ?? ""
+      pod = .kubernetes.pod_name
+      container = .kubernetes.container_name
+      parsed, err = parse_json(raw)
+      if err == null && is_object(parsed) {
+        . = object!(parsed)
+      } else {
+        . = {"message": raw, "level": "info", "service": container, "unstructured": true}
+      }
+      .kubernetes = {"pod": pod, "container": container}
+      # Never ship payloads, headers or cookies, whatever logged them.
+      del(.body)
+      del(.headers)
+      del(.cookie)
+      del(.authorization)
+
+  hela_redact:
+    type: remap
+    inputs: [hela_parse]
+    source: |
+      # Same masks as hela/core/logs.py; keep them in step (tests/test_logging.py and vector-test.yaml cover both).
+      # (Vector's config interpolates environment variables, so a literal dollar sign is written twice:
+      # "$${1}" below is capture group 1.)
+      if is_string(.message) {
+        m = string!(.message)
+        m = replace(m, r'eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+', "[jwt]")
+        m = replace(m, r'(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}', "$${1} [token]")
+        m = replace(m, r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', "[email]")
+        m = replace(m, r'(^|[^\w-])(\+?94\d{9}|0\d{9}|\+\d{10,14})(\D|$$)', "$${1}[phone]$${3}")
+        m = replace(m, r'(?i)\b(code|otp|pin)(\W{1,3})\d{4,8}\b', "$${1}$${2}[code]")
+        .message = m
+      }
+      if is_string(.exception) {
+        e = string!(.exception)
+        e = replace(e, r'eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+', "[jwt]")
+        e = replace(e, r'(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}', "$${1} [token]")
+        e = replace(e, r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', "[email]")
+        e = replace(e, r'(^|[^\w-])(\+?94\d{9}|0\d{9}|\+\d{10,14})(\D|$$)', "$${1}[phone]$${3}")
+        e = replace(e, r'(?i)\b(code|otp|pin)(\W{1,3})\d{4,8}\b', "$${1}$${2}[code]")
+        .exception = e
+      }
+
+sinks:
+  log_store:
+    type: http
+    inputs: [hela_redact]
+    uri: https://logs.example.invalid/ingest       # placeholder (DEC-08)
+    encoding: {codec: json}
+    compression: gzip
+    auth:
+      strategy: bearer
+      token: "${HELA_LOG_SINK_TOKEN}"
+    request: {retry_attempts: 10}
+    buffer: {type: disk, max_size: 268435488, when_full: block}

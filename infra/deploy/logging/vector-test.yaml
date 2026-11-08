@@ -1,0 +1,67 @@
+# Unit tests for the pipeline: `vector test vector.yaml vector-test.yaml` (run in CI with the pinned image).
+tests:
+  - name: structured line is parsed and kept
+    inputs:
+      - insert_at: hela_parse
+        type: log
+        log_fields:
+          message: '{"ts":"2026-11-08T00:00:00.000000Z","level":"info","logger":"hela.jobs","service":"worker","correlation_id":"c_1","message":"job_done kind=offer.expire queued_ms=4 run_ms=9"}'
+          kubernetes.pod_name: hela-worker-abc
+          kubernetes.container_name: worker
+    outputs:
+      - extract_from: hela_redact
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "worker")
+              assert_eq!(.correlation_id, "c_1")
+              assert_eq!(.message, "job_done kind=offer.expire queued_ms=4 run_ms=9")
+              assert_eq!(.kubernetes.pod, "hela-worker-abc")
+
+  - name: anything that slipped through is masked again
+    inputs:
+      - insert_at: hela_parse
+        type: log
+        log_fields:
+          message: 'raw line to +94770000123 with code: 123456, Authorization: Bearer abcdefgh12345 and ops@example.org'
+          kubernetes.pod_name: hela-api-abc
+          kubernetes.container_name: api
+    outputs:
+      - extract_from: hela_redact
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.unstructured, true)
+              assert_eq!(.message, "raw line to [phone] with code: [code], Authorization: Bearer [token] and [email]")
+
+  - name: ids, status codes and timings are left alone
+    inputs:
+      - insert_at: hela_parse
+        type: log
+        log_fields:
+          message: '{"message":"booking 0d8f6a52-3c1e-4c55-9d3e-6f1b2a7c9e10 status_code=200 run_ms=1234","exception":"DataError (sqlstate 22P02) at 0771234567"}'
+          kubernetes.pod_name: hela-api-abc
+          kubernetes.container_name: api
+    outputs:
+      - extract_from: hela_redact
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.message, "booking 0d8f6a52-3c1e-4c55-9d3e-6f1b2a7c9e10 status_code=200 run_ms=1234")
+              assert_eq!(.exception, "DataError (sqlstate 22P02) at [phone]")
+
+  - name: payload fields are dropped
+    inputs:
+      - insert_at: hela_parse
+        type: log
+        log_fields:
+          message: '{"message":"x","body":{"phone":"+94770000123"},"headers":{"authorization":"Bearer abcdefgh1234"}}'
+          kubernetes.pod_name: hela-api-abc
+          kubernetes.container_name: api
+    outputs:
+      - extract_from: hela_redact
+        conditions:
+          - type: vrl
+            source: |
+              assert!(!exists(.body))
+              assert!(!exists(.headers))

@@ -10,8 +10,10 @@ import psycopg
 from .app import create_app
 from .audit import service as audit
 from .booking.jobs import handlers
+from .core.config import get_settings
 from .core.db import tx
 from .core.jobs import CHANNEL, run_due
+from .core.logs import configure_logging
 from .ops.metrics import record_heartbeat
 
 log = logging.getLogger('hela.worker')
@@ -40,8 +42,9 @@ def _wait_for_work(listener, timeout: float) -> None:
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s %(message)s')
-    svc = create_app().state.services
+    settings = get_settings()
+    configure_logging(settings, 'worker')
+    svc = create_app(settings).state.services
     table = handlers(svc)
     stopping = False
 

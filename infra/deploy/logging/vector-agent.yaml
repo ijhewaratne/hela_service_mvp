@@ -1,0 +1,71 @@
+# Reads container logs from each node (read-only), keeps only the hela namespace (see vector.yaml), and ships them.
+# It needs read access to node log files, so it runs in the platform namespace, not in the restricted hela one.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vector-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hela-vector-agent
+rules:
+  - apiGroups: [""]
+    resources: [pods, namespaces, nodes]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hela-vector-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hela-vector-agent
+subjects:
+  - kind: ServiceAccount
+    name: vector-agent
+    namespace: hela-platform
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vector-agent
+spec:
+  selector:
+    matchLabels: {app.kubernetes.io/name: vector-agent}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: vector-agent}
+    spec:
+      serviceAccountName: vector-agent
+      containers:
+        - name: vector
+          image: vector
+          args: [--config-dir, /etc/vector/]
+          env:
+            - name: VECTOR_SELF_NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+            - name: HELA_LOG_SINK_TOKEN
+              valueFrom: {secretKeyRef: {name: hela-log-sink, key: HELA_LOG_SINK_TOKEN}}
+          resources:
+            requests: {cpu: 50m, memory: 96Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: config, mountPath: /etc/vector, readOnly: true}
+            - {name: data, mountPath: /var/lib/vector}
+            - {name: var-log, mountPath: /var/log, readOnly: true}
+            - {name: var-lib-containers, mountPath: /var/lib/docker/containers, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: vector-config}
+        - name: data
+          hostPath: {path: /var/lib/hela-vector, type: DirectoryOrCreate}
+        - name: var-log
+          hostPath: {path: /var/log}
+        - name: var-lib-containers
+          hostPath: {path: /var/lib/docker/containers}

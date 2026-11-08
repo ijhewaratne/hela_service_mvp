@@ -121,6 +121,11 @@ jobs:
         run: |
           docker run --rm -v "$PWD":/w:ro -w /w --entrypoint promtool prom/prometheus:v3.5.0 check rules alerts.yml
           docker run --rm -v "$PWD":/w:ro -w /w --entrypoint promtool prom/prometheus:v3.5.0 test rules alerts_test.yml
+      - name: Unit-test the log shipping pipeline (redaction)
+        working-directory: infra/deploy/logging
+        run: |
+          docker run --rm -v "$PWD":/w:ro -e HELA_LOG_SINK_TOKEN=ci timberio/vector:0.46.1-alpine validate --no-environment /w/vector.yaml
+          docker run --rm -v "$PWD":/w:ro -e HELA_LOG_SINK_TOKEN=ci timberio/vector:0.46.1-alpine test /w/vector.yaml /w/vector-test.yaml
 
   deploy-skeleton:
     runs-on: ubuntu-latest
@@ -130,6 +135,8 @@ jobs:
         run: |
           kubectl kustomize infra/deploy/kubernetes/overlays/staging > rendered.yaml
           docker run --rm -v "$PWD":/w:ro ghcr.io/yannh/kubeconform:v0.6.7 -strict -summary /w/rendered.yaml
+          kubectl kustomize infra/deploy/logging > logging.yaml
+          docker run --rm -v "$PWD":/w:ro ghcr.io/yannh/kubeconform:v0.6.7 -strict -summary /w/logging.yaml
       - name: Build the images (not pushed)
         run: |
           docker build -t hela-api:ci services/api

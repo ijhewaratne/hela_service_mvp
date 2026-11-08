@@ -8,7 +8,9 @@ from sqlalchemy import Connection, Engine, create_engine, text
 
 
 def make_engine(url: str) -> Engine:
-    return create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5, future=True)
+    # hide_parameters: database errors must not carry bound values (phone numbers, codes) into logs or
+    # jobs.last_error.
+    return create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5, future=True, hide_parameters=True)
 
 
 @contextmanager

@@ -73,6 +73,8 @@ class Settings(BaseSettings):
 
     # Prometheus scrape endpoint (/internal/metrics). Not mounted unless a token is set (§17).
     metrics_token: str | None = Field(default=None, min_length=24)
+    log_format: Literal['json', 'text'] | None = None   # default: text in dev/test, JSON elsewhere
+    log_level: Literal['debug', 'info', 'warning', 'error'] = 'info'
 
     # Sandbox SMS inbox: only mounted when env == 'dev' and a token is configured.
     dev_inbox_token: str | None = None
