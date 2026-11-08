@@ -1,7 +1,6 @@
 """Runtime settings. Secrets come from the environment only; nothing secret is committed."""
 from __future__ import annotations
 
-import base64
 import json
 from functools import lru_cache
 from typing import Literal
@@ -26,7 +25,8 @@ class Settings(BaseSettings):
     admin_refresh_token_hours: int = 12
     field_key_b64: str = 'ZGV2LW9ubHktZmllbGQta2V5LTMyLWJ5dGVzLXh4eHg='  # 32 bytes, dev only; key id 'k1'
     field_keyring: str | None = None            # JSON {"active", "keys"}; replaces field_key_b64 when set
-    lookup_key_b64: str = 'ZGV2LW9ubHktbG9va3VwLWtleS0zMi1ieXRlcy14eHg='  # 32 bytes, dev only
+    lookup_key_b64: str = 'ZGV2LW9ubHktbG9va3VwLWtleS0zMi1ieXRlcy14eHg='  # 32 bytes, dev only; key id 'k1'
+    lookup_keyring: str | None = None           # JSON {"active", "keys"}; replaces lookup_key_b64 when set
 
     otp_ttl_seconds: int = 300
     otp_max_attempts: int = 5
@@ -79,11 +79,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode='after')
     def refuse_dev_secrets_outside_dev(self):
-        from ..security.keys import DEV_MARKER, field_keyring, signing_keys
-        jwt_keys, field_keys = signing_keys(self), field_keyring(self)   # malformed key config fails at start-up
+        from ..security.keys import field_keyring, lookup_keyring, signing_keys
+        # Malformed key configuration fails at start-up.
+        jwt_keys, field_keys, lookup_keys = signing_keys(self), field_keyring(self), lookup_keyring(self)
         if self.env in ('staging', 'production'):
-            if jwt_keys.dev_material or field_keys.has_dev_material() \
-                    or base64.b64decode(self.lookup_key_b64).startswith(DEV_MARKER):
+            if jwt_keys.dev_material or field_keys.has_dev_material() or lookup_keys.has_dev_material():
                 raise ValueError('Development secrets are not allowed outside dev/test')
             if 'dev_s3_secret_only' in self.s3_secret_key:
                 raise ValueError('Development storage credentials are not allowed outside dev/test')

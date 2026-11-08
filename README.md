@@ -29,7 +29,7 @@
 | M03 Booking engine: addresses, quotes, requests, matching, offers, bookings, settlement, incidents | Done |
 | R1 gate hardening: multi-process/crash tests, load test, backup drill, ASVS self-assessment | **Done**: see [`docs/r1_gate/R1_GATE_REPORT.md`](docs/r1_gate/R1_GATE_REPORT.md) |
 | R2: Flutter customer/provider apps, React admin web | Done: see [`apps/README.md`](apps/README.md). On-device testing is still open |
-| Operations hardening: key rotation, metrics and alerts, deployment skeleton, accessibility checks | Done: see below |
+| Operations hardening: key rotation, metrics and alerts, deployment skeleton, accessibility checks, write-once audit export | Done: see below |
 
 ## Run locally (macOS)
 
@@ -77,7 +77,7 @@ Uploads made while it is unavailable are stored encrypted as `pending` and canno
 - **Step-up (Q14):** sensitive actions need a fresh TOTP check, valid for 5 minutes and only for the named action.
 - **Maker/checker (Q15):** enabling or disabling a region needs one admin to propose and a different admin to approve. The database also blocks self-approval. Staging and production refuse to enable a region that isn't marked approved.
 - **Data protection (Q65):** phone numbers are AES-256-GCM encrypted, with keyed hashes for lookups. Only the last 3 digits are ever returned. Audit records drop secret fields automatically.
-- **Audit (Q64):** the database computes a hash chain over the audit log and blocks UPDATE, DELETE and TRUNCATE. `GET /v1/admin/audit/verify` and `python -m hela.cli verify-audit` detect tampering.
+- **Audit (Q64):** the database computes a hash chain over the audit log and blocks UPDATE, DELETE and TRUNCATE. `GET /v1/admin/audit/verify` and `python -m hela.cli verify-audit` detect tampering. `export-audit` copies sealed rows to write-once (Object Lock) storage, so even an owner-level rewrite is caught.
 - **Errors (Q62):** every error uses the spec §13.1 envelope with a `message_key` and correlation ID. Submitted values are never echoed back.
 - **Notices (FR-ID-05):** versioned notices per language. Each acceptance records the version, language and processing context.
 - **Localisation (Q61):** `si`/`ta`/`en` preference, with English as the reviewed source. `si` and `ta` are marked untranslated.
@@ -148,8 +148,12 @@ address → quote → accept terms → request (beneficiary consent if booking f
   batches while the service runs, including append-only history rows (migration 0008 allows only `*_enc` columns
   to change, only for the owner, only during a rotation). Access tokens are Ed25519 (EdDSA) with a `kid`, so the
   signing key rotates with a verify-only overlap. `key-status` shows what is left under old keys.
+  Phone lookup keys rotate too, with a dual-lookup period and `rotate-lookup-key`.
   See [`docs/security/KEY_ROTATION_RUNBOOK.md`](docs/security/KEY_ROTATION_RUNBOOK.md).
-- **Metrics and alerts (§17):** `/internal/metrics` (only with `HELA_METRICS_TOKEN`) and 22 alert rules covering
+- **Write-once audit export (Q64):** `export-audit` copies the sealed chain hourly to an S3 Object Lock bucket in
+  chained segments; `verify-audit-export --against-db` detects a rewritten database chain, edited exports and
+  hidden deletions. See [`docs/security/AUDIT_EXPORT_RUNBOOK.md`](docs/security/AUDIT_EXPORT_RUNBOOK.md).
+- **Metrics and alerts (§17):** `/internal/metrics` (only with `HELA_METRICS_TOKEN`) and 24 alert rules covering
   each alert the spec lists: error rates, stuck outbox and jobs, competing acceptances, expired approvals, failed
   backups, unusual evidence access, low supply and incident SLA. Worker and backup heartbeats (migration 0009).
   See [`infra/monitoring/README.md`](infra/monitoring/README.md).
@@ -161,7 +165,7 @@ address → quote → accept terms → request (beneficiary consent if booking f
 ### Known gaps (tracked for the R1 gate)
 
 - No real SMS vendor (DEC-08). Outside dev, the app refuses to pretend an SMS was sent.
-- Keys come from environment variables. Field and signing keys are versioned and can be rotated without downtime ([runbook](docs/security/KEY_ROTATION_RUNBOOK.md)), but a managed KMS provider is still needed before staging, and the phone lookup key cannot be rotated yet.
+- Keys come from environment variables. Field, lookup and signing keys are versioned and can be rotated without downtime ([runbook](docs/security/KEY_ROTATION_RUNBOOK.md)). A managed KMS provider is still needed before staging.
 - Admin TOTP recovery is an operator procedure only, with no self-service yet.
 - No real routing or ETA (Q44). Distances are straight-line, are labelled as approximate, and no arrival time is shown.
 - There's no rescheduling or job extension (Q33, Q52), and no on-demand bookings (Q26). Each is either deferred or behind a disabled setting.

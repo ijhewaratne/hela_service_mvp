@@ -17,7 +17,6 @@ from ..core.db import many, one, run, tx
 from ..core.errors import ApiError
 from ..core.schema import Input
 from ..core.services import Services, services
-from ..security.crypto import constant_time_equal
 from . import sessions
 
 router = APIRouter(prefix='/v1', tags=['identity'])
@@ -67,18 +66,23 @@ def _code_hash(svc: Services, challenge_id: str, code: str) -> str:
     return svc.cipher.lookup_hash(f'{challenge_id}:{code}', purpose='otp')
 
 
+def _code_matches(svc: Services, stored: str, challenge_id: str, code: str) -> bool:
+    return svc.cipher.lookup_matches(stored, f'{challenge_id}:{code}', purpose='otp')
+
+
 @router.post('/auth/otp/request', status_code=202)
 def request_otp(body: OtpRequestIn, request: Request, svc: Services = Depends(services)):
     s = svc.settings
     phone_lookup = svc.cipher.lookup_hash(body.phone, purpose='phone')
+    candidates = svc.cipher.lookup_candidates(body.phone, purpose='phone')   # all ring keys, during key rotation
     ratelimit.hit(svc.redis, f'otp-ip:{client_ip(request)}', limit=s.otp_ip_limit_per_window,
                   window_seconds=s.otp_send_window_seconds)
     with tx(svc.engine) as con:
         # Serialize sends per phone so concurrent requests cannot exceed the cap.
         run(con, 'SELECT pg_advisory_xact_lock(hashtext(:k))', k=f'otp:{phone_lookup}')
         recent = one(con, '''SELECT count(*) AS n FROM otp_challenges
-                             WHERE phone_lookup = :p AND created_at > now() - :w''',
-                     p=phone_lookup, w=timedelta(seconds=s.otp_send_window_seconds))['n']
+                             WHERE phone_lookup = ANY(:p) AND created_at > now() - :w''',
+                     p=candidates, w=timedelta(seconds=s.otp_send_window_seconds))['n']
         if recent >= s.otp_max_sends_per_window:
             raise ApiError(429, 'RATE_LIMITED', 'error.rate_limited', retryable=True)
         code = f'{secrets.randbelow(10**6):06d}'
@@ -100,18 +104,19 @@ def request_otp(body: OtpRequestIn, request: Request, svc: Services = Depends(se
 @router.post('/auth/otp/verify')
 def verify_otp(body: OtpVerifyIn, svc: Services = Depends(services)):
     phone_lookup = svc.cipher.lookup_hash(body.phone, purpose='phone')
+    candidates = svc.cipher.lookup_candidates(body.phone, purpose='phone')
     error: ApiError | None = None
     tokens = None
     with tx(svc.engine) as con:
         ch = one(con, '''SELECT id, code_hash, attempts, max_attempts, consumed_at,
                                 expires_at < now() AS expired
-                         FROM otp_challenges WHERE id = CAST(:id AS uuid) AND phone_lookup = :p AND purpose = :purpose
-                         FOR UPDATE''', id=str(body.challenge_id), p=phone_lookup, purpose=body.purpose)
+                         FROM otp_challenges WHERE id = CAST(:id AS uuid) AND phone_lookup = ANY(:p) AND purpose = :purpose
+                         FOR UPDATE''', id=str(body.challenge_id), p=candidates, purpose=body.purpose)
         if not ch or ch['consumed_at'] is not None or ch['expired']:
             error = ApiError(400, 'OTP_INVALID', 'auth.otp_invalid')
         elif ch['attempts'] >= ch['max_attempts']:
             error = ApiError(429, 'OTP_LOCKED', 'auth.otp_locked')
-        elif not constant_time_equal(ch['code_hash'], _code_hash(svc, str(body.challenge_id), body.code)):
+        elif not _code_matches(svc, ch['code_hash'], str(body.challenge_id), body.code):
             run(con, 'UPDATE otp_challenges SET attempts = attempts + 1 WHERE id = :id', id=ch['id'])
             if ch['attempts'] + 1 >= ch['max_attempts']:
                 # AT-025: lockouts are recorded for abuse review (pseudonymous challenge id, never the phone).
@@ -120,11 +125,21 @@ def verify_otp(body: OtpVerifyIn, svc: Services = Depends(services)):
             error = ApiError(400, 'OTP_INVALID', 'auth.otp_invalid')
         else:
             run(con, 'UPDATE otp_challenges SET consumed_at = now() WHERE id = :id', id=ch['id'])
-            created = one(con, '''INSERT INTO users(phone_lookup, phone_enc, phone_last3)
-                                  VALUES (:p, :enc, :last3) ON CONFLICT (phone_lookup) DO NOTHING RETURNING id''',
-                          p=phone_lookup, enc=svc.cipher.encrypt(body.phone, context='users.phone'),
-                          last3=body.phone[-3:])
-            user = one(con, 'SELECT id, account_state FROM users WHERE phone_lookup = :p', p=phone_lookup)
+            # An existing account may still carry a hash under an older lookup key while keys rotate; find it
+            # under any ring key (never create a second account) and move it to the active key.
+            user = one(con, '''SELECT id, account_state, phone_lookup FROM users WHERE phone_lookup = ANY(:p)
+                               ORDER BY created_at LIMIT 1 FOR UPDATE''', p=candidates)
+            created = None
+            if user is None:
+                created = one(con, '''INSERT INTO users(phone_lookup, phone_enc, phone_last3)
+                                      VALUES (:p, :enc, :last3) ON CONFLICT (phone_lookup) DO NOTHING RETURNING id''',
+                              p=phone_lookup, enc=svc.cipher.encrypt(body.phone, context='users.phone'),
+                              last3=body.phone[-3:])
+                user = one(con, 'SELECT id, account_state, phone_lookup FROM users WHERE phone_lookup = :p',
+                           p=phone_lookup)
+            elif user['phone_lookup'] != phone_lookup:
+                run(con, 'UPDATE users SET phone_lookup = :p, updated_at = now() WHERE id = :id',
+                    p=phone_lookup, id=user['id'])
             uid = str(user['id'])
             if created:
                 run(con, "INSERT INTO user_personas(user_id, persona) VALUES (:u, 'customer')", u=uid)

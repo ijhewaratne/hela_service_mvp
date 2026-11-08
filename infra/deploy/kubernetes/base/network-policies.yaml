@@ -60,7 +60,7 @@ metadata:
 spec:
   podSelector:
     matchExpressions:
-      - {key: app.kubernetes.io/name, operator: In, values: [hela-api, hela-worker, hela-migrate]}
+      - {key: app.kubernetes.io/name, operator: In, values: [hela-api, hela-worker, hela-migrate, hela-audit-export]}
   policyTypes: [Egress]
   egress:
     - to:   # managed Postgres/PostGIS and Redis (placeholder private range)

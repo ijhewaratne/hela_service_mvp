@@ -5,6 +5,10 @@ Every ciphertext and every access token names the key that produced it, so keys 
 * Field encryption uses a *keyring*: one active key that encrypts, plus older keys that only decrypt. After a new
   key becomes active, `python -m hela.cli rotate-field-keys` re-encrypts stored values in batches; once
   `key-status` shows no rows left under an old key, that key can be removed from the ring.
+* Lookup hashes (keyed HMACs used to find an account by phone number without storing it in clear) also use a
+  keyring. A hash made with a key other than the legacy 'k1' is stored as `<key id>:<hex>`. While a new lookup
+  key is being introduced, lookups try every key in the ring; `rotate-lookup-key` recomputes stored account
+  hashes from the encrypted phone number, and short-lived OTP and consent hashes simply expire.
 * Access tokens are signed with Ed25519 (EdDSA) and carry a `kid` header. Retired signing keys stay in the ring as
   verify-only public keys for one access-token lifetime (10 minutes), then are dropped.
 
@@ -26,6 +30,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 
 KEY_ID = re.compile(r'^[a-z0-9][a-z0-9_-]{0,31}$')
 LEGACY_FIELD_KEY_ID = 'k1'           # v1 ciphertexts carry no key id; they were written with this key
+LEGACY_LOOKUP_KEY_ID = 'k1'          # lookup hashes without a "<key id>:" prefix were made with this key
 DEV_MARKER = b'dev-only'             # every committed development key starts with this; refused outside dev/test
 
 
@@ -72,23 +77,24 @@ class Keyring:
 
 
 class KeyProvider(Protocol):
-    """What the field cipher needs. A KMS-backed provider implements the same three methods."""
+    """What the field cipher needs. A KMS-backed provider implements the same methods."""
 
     def active_field_key(self) -> tuple[str, bytes]: ...
     def field_key(self, key_id: str) -> bytes: ...          # raises KeyError for an unknown or removed key
-    def lookup_key(self) -> bytes: ...
+    def active_lookup_key(self) -> tuple[str, bytes]: ...
+    def lookup_keys(self) -> dict[str, bytes]: ...          # every lookup key still in the ring, active included
 
 
 class LocalKeyProvider:
     """Keys held in process memory, loaded from environment variables. Development and tests only."""
 
-    def __init__(self, field: Keyring, lookup: bytes):
+    def __init__(self, field: Keyring, lookup: Keyring):
         self._field = field
         self._lookup = lookup
 
     @classmethod
     def from_settings(cls, settings) -> LocalKeyProvider:
-        return cls(field_keyring(settings), _b64_32(settings.lookup_key_b64, 'HELA_LOOKUP_KEY_B64'))
+        return cls(field_keyring(settings), lookup_keyring(settings))
 
     def active_field_key(self) -> tuple[str, bytes]:
         return self._field.active, self._field.keys[self._field.active]
@@ -96,14 +102,24 @@ class LocalKeyProvider:
     def field_key(self, key_id: str) -> bytes:
         return self._field.keys[key_id]
 
-    def lookup_key(self) -> bytes:
-        return self._lookup
+    def active_lookup_key(self) -> tuple[str, bytes]:
+        return self._lookup.active, self._lookup.keys[self._lookup.active]
+
+    def lookup_keys(self) -> dict[str, bytes]:
+        return dict(self._lookup.keys)
 
 
 def field_keyring(settings) -> Keyring:
     if settings.field_keyring:
         return Keyring.parse(settings.field_keyring, 'HELA_FIELD_KEYRING')
     return Keyring(LEGACY_FIELD_KEY_ID, {LEGACY_FIELD_KEY_ID: _b64_32(settings.field_key_b64, 'HELA_FIELD_KEY_B64')})
+
+
+def lookup_keyring(settings) -> Keyring:
+    if settings.lookup_keyring:
+        return Keyring.parse(settings.lookup_keyring, 'HELA_LOOKUP_KEYRING')
+    return Keyring(LEGACY_LOOKUP_KEY_ID,
+                   {LEGACY_LOOKUP_KEY_ID: _b64_32(settings.lookup_key_b64, 'HELA_LOOKUP_KEY_B64')})
 
 
 def build_key_provider(settings) -> KeyProvider:

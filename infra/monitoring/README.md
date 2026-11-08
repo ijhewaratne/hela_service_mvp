@@ -38,12 +38,13 @@ series; the alert's runbook says to look up who in `sensitive_access_logs`.
 | Unusual admin evidence access | `HelaUnusualEvidenceAccess`, `HelaUnusualSensitiveAccess` |
 | §11.4 candidate supply too low | `HelaLowSupply` |
 | Incident case SLA | `HelaIncidentResponseOverdue` |
-| Also added | `HelaAuditSealingLag`, `HelaOtpLockoutSpike`, `HelaPrivacyRequestsOverdue`, `HelaPaymentDisputesHigh`, `HelaJobRunningTooLong`, `HelaDeadJobs` |
+| Also added | `HelaAuditSealingLag`, `HelaOtpLockoutSpike`, `HelaPrivacyRequestsOverdue`, `HelaPaymentDisputesHigh`, `HelaJobRunningTooLong`, `HelaDeadJobs`, `HelaAuditExportFailed`, `HelaAuditExportStale` (write-once audit export, [runbook](../../docs/security/AUDIT_EXPORT_RUNBOOK.md)) |
 
 ## Heartbeats
 
 `ops_heartbeats` holds the last success and failure of periodic operations. The worker records `worker` every
-15 seconds. The backup drill records `backup` when it finishes, or a failure if it exits early. Other scheduled
+15 seconds. The backup drill records `backup` when it finishes, or a failure if it exits early. `export-audit` records
+`audit_export`. Other scheduled
 checks can do the same:
 
 ```bash

@@ -1,0 +1,53 @@
+# Hourly export of the sealed audit chain to an S3 Object Lock bucket (Q41, NFR-12). Each run only adds new
+# segments; the HelaAuditExportFailed / HelaAuditExportStale alerts watch its heartbeat.
+#
+# The hela-audit-export secret overrides the S3 credentials from hela-secrets with an identity that may only
+# PutObject, GetObject, GetObjectRetention and ListBucketVersions on the export bucket: no delete, no
+# PutObjectRetention, no BypassGovernanceRetention. Create the bucket with Object Lock enabled and use COMPLIANCE
+# mode outside development. The retention period is DEC-09 (pending); 7 days below is a placeholder.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hela-audit-export
+spec:
+  schedule: "17 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 900
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels: {app.kubernetes.io/name: hela-audit-export}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: export
+              image: hela-api
+              command: [python, -m, hela.cli, export-audit, --bucket, "$(HELA_AUDIT_EXPORT_BUCKET)",
+                        --mode, compliance, --retention-days, "7"]
+              envFrom:
+                - configMapRef: {name: hela-config}
+                - secretRef: {name: hela-secrets}
+                - secretRef: {name: hela-audit-export}
+              resources:
+                requests: {cpu: 50m, memory: 128Mi}
+                limits: {memory: 256Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+          volumes:
+            - name: tmp
+              emptyDir: {sizeLimit: 16Mi}

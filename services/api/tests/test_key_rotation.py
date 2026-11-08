@@ -19,6 +19,7 @@ from hela.security.keys import build_key_provider, signing_keys
 
 K1 = 'ZGV2LW9ubHktZmllbGQta2V5LTMyLWJ5dGVzLXh4eHg='   # the default dev field key (id k1)
 K2 = base64.b64encode(os.urandom(32)).decode()
+LK1_DEV = 'ZGV2LW9ubHktbG9va3VwLWtleS0zMi1ieXRlcy14eHg='   # the default dev lookup key
 
 
 def ring(active, **keys):
@@ -193,5 +194,92 @@ def test_key_configuration_is_validated_at_start_up():
     for dev in ('jwt_keyring', 'field_keyring', 'lookup_key_b64'):
         with pytest.raises(ValueError, match='Development secrets'):
             Settings(env='staging', **{k: v for k, v in real.items() if k != dev})
+    with pytest.raises(ValueError, match='Development secrets'):                # a dev key left in a lookup ring
+        Settings(env='staging', **real, lookup_keyring=ring('l2', k1=LK1_DEV, l2=K2))
+    Settings(env='staging', **real, lookup_keyring=ring('l2', l2=K2))
     with pytest.raises(ValueError, match='not implemented'):
         build_key_provider(Settings(env='test').model_copy(update={'key_provider': 'aws-kms'}))
+
+
+# --- lookup-key rotation ---------------------------------------------------------------------------------------
+
+LK1 = LK1_DEV
+LK2 = base64.b64encode(os.urandom(32)).decode()
+
+
+def _otp(client, phone):
+    r = client.post('/v1/auth/otp/request', json={'phone': phone})
+    assert r.status_code == 202, r.text
+    return r.json()['challenge_id']
+
+
+def _code(db, cipher, phone):
+    lookups = cipher.lookup_candidates(phone, purpose='phone')
+    body = db('SELECT body FROM dev_sms_inbox WHERE phone_lookup = ANY(:p) ORDER BY id DESC LIMIT 1', p=lookups)
+    return body[0]['body'].split('code: ')[1][:6]
+
+
+def _verify(client, phone, challenge, code):
+    return client.post('/v1/auth/otp/verify', json={'phone': phone, 'challenge_id': challenge, 'code': code,
+                                                    'device_label': 'test'})
+
+
+def _app_with(settings, **update):
+    s = settings.model_copy(update=update)
+    return s, create_app(s)
+
+
+def test_lookup_key_rotation_keeps_accounts_and_pending_codes(client, db, owner_engine, settings, cipher):
+    a, b, c = '+94770000101', '+94770000102', '+94770000103'
+    # Before rotation: account A exists, and B has an OTP in flight; both hashed with the legacy key.
+    assert _verify(client, a, _otp(client, a), _code(db, cipher, a)).status_code == 200
+    b_challenge = _otp(client, b)
+    b_code = _code(db, cipher, b)
+    a_id = db('SELECT id FROM users')[0]['id']
+    assert ':' not in db('SELECT phone_lookup FROM users')[0]['phone_lookup']
+
+    # A new lookup key becomes active, with the old one still in the ring.
+    s2, app2 = _app_with(settings, lookup_keyring=ring('l2', k1=LK1, l2=LK2))
+    c2 = FieldCipher(build_key_provider(s2))
+    with TestClient(app2) as client2:
+        # The code sent before the switch still works, and its new account is hashed with the new key.
+        assert _verify(client2, b, b_challenge, b_code).status_code == 200
+        assert db('SELECT phone_lookup FROM users WHERE id <> :a', a=a_id)[0]['phone_lookup'].startswith('l2:')
+        # Signing in again finds the existing account (no duplicate) and moves it to the new key.
+        assert _verify(client2, a, _otp(client2, a), _code(db, c2, a)).status_code == 200
+        rows = db('SELECT id, phone_lookup FROM users ORDER BY created_at')
+        assert len(rows) == 2 and rows[0]['id'] == a_id and rows[0]['phone_lookup'].startswith('l2:')
+        # Send limits count codes made under either key: one old-key send, one new, one more, then refused
+        # (counting only new-key sends would allow a fourth).
+        _otp(client2, a)
+        assert client2.post('/v1/auth/otp/request', json={'phone': a}).status_code == 429
+    app2.state.services.engine.dispose()
+
+    # An account that has not signed in since is re-indexed by the operator command.
+    db('''INSERT INTO users(phone_lookup, phone_enc, phone_last3) VALUES (:l, :e, '103')''',
+       l=cipher.lookup_hash(c, purpose='phone'), e=cipher.encrypt(c, context='users.phone'))
+    status = rotation.lookup_key_status(owner_engine)
+    assert status['users.phone_lookup'] == {'l2': 2, 'k1': 1}
+    assert rotation.reindex_user_lookups(owner_engine, c2) == 1
+    assert rotation.lookup_key_status(owner_engine)['users.phone_lookup'] == {'l2': 3}
+    assert db("SELECT count(*) AS n FROM audit_logs WHERE action = 'keys.lookup_reindexed'")[0]['n'] == 1
+
+    # With the old key removed, every account still signs in to the same user.
+    s3, app3 = _app_with(settings, lookup_keyring=ring('l2', l2=LK2))
+    with TestClient(app3) as client3:
+        assert _verify(client3, c, _otp(client3, c), _code(db, FieldCipher(build_key_provider(s3)), c)).status_code == 200
+    app3.state.services.engine.dispose()
+    assert db('SELECT count(*) AS n FROM users')[0]['n'] == 3
+
+
+def test_lookup_hashes_name_their_key(settings):
+    old = cipher_for(settings)
+    both = cipher_for(settings, lookup_keyring=ring('l2', k1=LK1, l2=LK2))
+    legacy = old.lookup_hash('+94770000101', purpose='phone')
+    assert ':' not in legacy and both.lookup_hash('+94770000101', purpose='phone').startswith('l2:')
+    assert both.lookup_candidates('+94770000101', purpose='phone')[1] == legacy
+    assert both.lookup_matches(legacy, '+94770000101', purpose='phone')
+    assert not both.lookup_matches(legacy, '+94770000102', purpose='phone')
+    assert not both.lookup_matches('zz:' + legacy, '+94770000101', purpose='phone')     # unknown key id
+    only_new = cipher_for(settings, lookup_keyring=ring('l2', l2=LK2))
+    assert not only_new.lookup_matches(legacy, '+94770000101', purpose='phone')      # removed key

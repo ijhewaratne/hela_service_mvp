@@ -9,6 +9,9 @@
   python -m hela.cli generate-keys
   python -m hela.cli key-status
   python -m hela.cli rotate-field-keys
+  python -m hela.cli rotate-lookup-key
+  python -m hela.cli export-audit --dir ./audit-export          (or --bucket NAME for S3 Object Lock)
+  python -m hela.cli verify-audit-export --dir ./audit-export --against-db
   python -m hela.cli record-heartbeat --name backup --status ok
 """
 from __future__ import annotations
@@ -152,6 +155,45 @@ def verify_audit(_args) -> int:
     return 1
 
 
+def _audit_sink(args, settings):
+    from .audit import export
+    if args.dir:
+        return export.DirectorySink(args.dir)
+    store = _store(settings.model_copy(update={'s3_bucket': args.bucket}))
+    sink = export.S3LockedSink(store._s3, args.bucket, retention_days=args.retention_days, mode=args.mode.upper())
+    sink.ensure_bucket()
+    return sink
+
+
+def export_audit(args) -> int:
+    """Run on a schedule (see infra/deploy). Records the `audit_export` heartbeat used by the monitoring alerts."""
+    from .audit import export
+    settings = get_settings()
+    engine = make_engine(settings.database_url)
+    try:
+        result = export.export(engine, _audit_sink(args, settings))
+    except Exception as exc:
+        with tx(engine) as con:
+            heartbeats.record_heartbeat(con, 'audit_export', ok=False, detail=type(exc).__name__)
+        print(f'Audit export failed: {exc}', file=sys.stderr)
+        return 1
+    with tx(engine) as con:
+        heartbeats.record_heartbeat(con, 'audit_export', ok=True, detail=f'{result.rows} rows')
+    print(json.dumps({'manifest': result.sequence, 'rows': result.rows, 'last_position': result.last_position}))
+    return 0
+
+
+def verify_audit_export(args) -> int:
+    from .audit import export
+    settings = get_settings()
+    engine = make_engine(settings.database_url) if args.against_db else None
+    report = export.verify(_audit_sink(args, settings), engine)
+    for problem in report.problems:
+        print(f'PROBLEM: {problem}', file=sys.stderr)
+    print(f'{report.manifests} manifests, {report.rows} rows: ' + ('intact' if report.ok else 'NOT INTACT'))
+    return 0 if report.ok else 1
+
+
 def _store(settings):
     return S3ObjectStore(endpoint=settings.s3_endpoint, access_key=settings.s3_access_key,
                          secret_key=settings.s3_secret_key, bucket=settings.s3_bucket)
@@ -214,7 +256,8 @@ def generate_keys(args) -> int:
     field = base64.b64encode(secrets.token_bytes(32)).decode()
     seed = secrets.token_bytes(32)
     public = Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    print(json.dumps({'field_key': {args.key_id: field},
+    lookup = base64.b64encode(secrets.token_bytes(32)).decode()
+    print(json.dumps({'field_key': {args.key_id: field}, 'lookup_key': {args.key_id: lookup},
                       'jwt_seed': {args.key_id: base64.b64encode(seed).decode()},
                       'jwt_public_for_verify_only': {args.key_id: base64.b64encode(public).decode()}}, indent=2))
     return 0
@@ -230,6 +273,15 @@ def key_status(_args) -> int:
             print(f'  {column:45} ' + ', '.join(f'{k}={n}' for k, n in sorted(counts.items())))
     left = sum(n for counts in status.values() for k, n in counts.items() if k != active)
     print(f'Values under other keys: {left}' + ('' if left else ' (older keys can be removed from the ring)'))
+    lookup_active = _cipher(settings).active_lookup_key_id
+    lookups = rotation.lookup_key_status(make_engine(_owner_url()))
+    print(f'Active lookup key: {lookup_active}')
+    for column, counts in lookups.items():
+        if counts:
+            print(f'  {column:45} ' + ', '.join(f'{k}={n}' for k, n in sorted(counts.items())))
+    left = sum(n for counts in lookups.values() for k, n in counts.items() if k != lookup_active)
+    print(f'Live lookup hashes under other keys: {left}'
+          + ('' if left else ' (older lookup keys can be removed from the ring)'))
     return 0
 
 
@@ -242,6 +294,20 @@ def rotate_field_keys(args) -> int:
     print(json.dumps({'active_key': cipher.active_key_id, 'rewrapped': {k: v for k, v in done.items() if v},
                       'remaining_under_other_keys': left}))
     return 0 if left == 0 else 3      # rows locked by live traffic are skipped; run again
+
+
+def rotate_lookup_key(args) -> int:
+    settings = get_settings()
+    cipher = _cipher(settings)
+    engine = make_engine(_owner_url())
+    done = rotation.reindex_user_lookups(engine, cipher, batch=args.batch)
+    status = rotation.lookup_key_status(engine)
+    users_left = sum(n for k, n in status['users.phone_lookup'].items() if k != cipher.active_lookup_key_id)
+    short_lived = sum(n for col, counts in status.items() if col != 'users.phone_lookup'
+                      for k, n in counts.items() if k != cipher.active_lookup_key_id)
+    print(json.dumps({'active_lookup_key': cipher.active_lookup_key_id, 'accounts_reindexed': done,
+                      'accounts_remaining': users_left, 'short_lived_hashes_under_other_keys': short_lived}))
+    return 0 if users_left == 0 else 3
 
 
 def record_heartbeat(args) -> int:
@@ -271,6 +337,20 @@ def main(argv=None) -> int:
     rk = sub.add_parser('rotate-field-keys')
     rk.add_argument('--batch', type=int, default=200)
     rk.set_defaults(fn=rotate_field_keys)
+    rl = sub.add_parser('rotate-lookup-key')
+    rl.add_argument('--batch', type=int, default=200)
+    rl.set_defaults(fn=rotate_lookup_key)
+    for name, fn in (('export-audit', export_audit), ('verify-audit-export', verify_audit_export)):
+        ex = sub.add_parser(name)
+        target = ex.add_mutually_exclusive_group(required=True)
+        target.add_argument('--dir', help='local directory (development only; not write-once storage)')
+        target.add_argument('--bucket', help='S3-compatible bucket with Object Lock enabled')
+        ex.add_argument('--retention-days', type=int, default=7,
+                        help='Object Lock retention; the real period is DEC-09 (pending)')
+        ex.add_argument('--mode', choices=['governance', 'compliance'], default='governance')
+        if name == 'verify-audit-export':
+            ex.add_argument('--against-db', action='store_true', help='also compare with the live audit_chain')
+        ex.set_defaults(fn=fn)
     hb = sub.add_parser('record-heartbeat')
     hb.add_argument('--name', required=True)
     hb.add_argument('--status', choices=['ok', 'failed'], required=True)

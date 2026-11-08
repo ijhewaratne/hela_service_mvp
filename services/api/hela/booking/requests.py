@@ -26,7 +26,6 @@ from ..core.schema import Input
 from ..core.services import Services, services
 from ..customers.routes import customer
 from ..notifications.outbox import notify
-from ..security.crypto import constant_time_equal
 from ..verification.eligibility import active_policy
 
 router = APIRouter(prefix='/v1', tags=['requests'])
@@ -306,8 +305,7 @@ def respond_consent(consent_id: UUID, body: ConsentResponseIn, svc: Services = D
         c = one(con, 'SELECT * FROM beneficiary_consents WHERE id = :id FOR UPDATE', id=consent_id)
         if not c or c['status'] != 'pending' or c['expires_at'] <= datetime.now(UTC) or c['attempts'] >= 5:
             error = ApiError(400, 'CONSENT_INVALID', 'request.consent_invalid')
-        elif not constant_time_equal(c['code_hash'], svc.cipher.lookup_hash(f'{consent_id}:{body.code}',
-                                                                            purpose='consent')):
+        elif not svc.cipher.lookup_matches(c['code_hash'], f'{consent_id}:{body.code}', purpose='consent'):
             run(con, 'UPDATE beneficiary_consents SET attempts = attempts + 1 WHERE id = :id', id=consent_id)
             error = ApiError(400, 'CONSENT_INVALID', 'request.consent_invalid')
         else:

@@ -10,7 +10,7 @@ Today only `HELA_KEY_PROVIDER=local` exists; the API refuses to start with any o
 |---|---|---|---|
 | Field keys (`HELA_FIELD_KEYRING`) | AES-256-GCM encryption of personal fields and of the per-file data keys for evidence objects | Every ciphertext starts with `v2`, then the key id | Supported, no downtime |
 | Token signing keys (`HELA_JWT_KEYRING`) | Ed25519 (EdDSA) signatures on 10-minute access tokens | The token's `kid` header | Supported, no downtime |
-| Lookup key (`HELA_LOOKUP_KEY_B64`) | Keyed hash used to find an account by phone number | Not versioned | **Not supported yet.** Rotating it needs every lookup hash recomputed, with sign-in paused or a dual lookup period |
+| Lookup keys (`HELA_LOOKUP_KEYRING`) | Keyed HMACs used to find an account by phone number, and to check OTP and beneficiary-consent codes | A stored hash is `<key id>:<hex>`; bare hex means the legacy key `k1` | Supported, no downtime (dual lookup) |
 
 Evidence files themselves are encrypted with a random data key per file. Rotating the field key re-wraps those data
 keys; the stored files do not have to be rewritten.
@@ -19,12 +19,13 @@ keys; the stored files do not have to be rewritten.
 
 ```json
 HELA_FIELD_KEYRING = {"active": "k2", "keys": {"k1": "<base64 32 bytes>", "k2": "<base64 32 bytes>"}}
+HELA_LOOKUP_KEYRING = {"active": "l2", "keys": {"k1": "<base64 32 bytes>", "l2": "<base64 32 bytes>"}}
 HELA_JWT_KEYRING   = {"active": "j2", "keys": {"j2": "<base64 32-byte Ed25519 seed>"},
                       "verify_only": {"j1": "<base64 32-byte Ed25519 public key>"}}
 ```
 
 Key ids are 1–32 characters: lowercase letters, digits, `_` and `-`. If `HELA_FIELD_KEYRING` is not set, the
-single `HELA_FIELD_KEY_B64` is used as key `k1`. Malformed keyrings stop the service at start-up. In staging and
+single `HELA_FIELD_KEY_B64` is used as key `k1`; likewise `HELA_LOOKUP_KEY_B64` for lookups. Malformed keyrings stop the service at start-up. In staging and
 production the committed development keys are refused.
 
 Generate fresh material (printed once to the operator's terminal; put it straight into the secret manager):
@@ -66,6 +67,34 @@ value, and any delete are still refused. The runtime role has no UPDATE grant on
 `tests/test_key_rotation.py` fails if an encrypted column is added to the schema without being registered in
 `hela/security/rotation.py`.
 
+## Rotating the lookup key
+
+A lookup hash cannot be decrypted, so it cannot be re-wrapped; it is recomputed from the value it stands for.
+
+1. Add the new key and make it active, keeping the old one:
+   `{"active": "l2", "keys": {"k1": "...", "l2": "..."}}`. Deploy the API and the worker. New hashes are written
+   with `l2`. Every lookup tries all keys in the ring (`= ANY(...)`), so existing accounts, OTP codes already sent
+   and pending beneficiary-consent codes keep working. OTP send limits count codes made under either key.
+   An account found under the old key is moved to the new one when its owner next signs in; a second account is
+   never created for the same number.
+2. Recompute the remaining account hashes from the encrypted phone numbers, as the schema owner:
+
+   ```bash
+   python -m hela.cli rotate-lookup-key --batch 200
+   ```
+
+   Same batching and `SKIP LOCKED` behaviour as field rotation; exit code 3 means run it again. It writes one
+   `keys.lookup_reindexed` audit entry.
+3. Short-lived hashes (OTP challenges, consent codes, the dev SMS inbox) are not recomputed; they expire. Wait at
+   least one OTP send window (`HELA_OTP_SEND_WINDOW_SECONDS`, 15 minutes) and the consent lifetime, then run
+   `key-status`. `Live lookup hashes under other keys: 0` means `k1` can be removed from the ring.
+4. Remove the old key and deploy. Backups taken before step 2 hold account hashes under the old key: after a restore
+   from one, put the old key back in the ring (inactive) and run `rotate-lookup-key` again.
+
+**If a lookup key is compromised:** the hashes alone do not reveal phone numbers without the key, but with it an
+attacker can test guessed numbers. Rotate as above without waiting, and also rotate the field key if it may have
+been exposed at the same time.
+
 ## Rotating the token-signing key
 
 1. Generate a new key (`generate-keys`). Set it as the active signing key and move the old key to
@@ -82,7 +111,7 @@ signed with the old key stops working immediately.
 
 ## What a KMS provider must do
 
-Implement `KeyProvider` (`active_field_key`, `field_key`, `lookup_key`) and the `SigningKeys` interface in
+Implement `KeyProvider` (`active_field_key`, `field_key`, `active_lookup_key`, `lookup_keys`) and the `SigningKeys` interface in
 `hela/security/keys.py`, for example by keeping the field keys wrapped by a KMS key and unwrapping them at start-up,
 and by signing tokens with a KMS-held Ed25519 key. Register it under a new `HELA_KEY_PROVIDER` value. The rotation
 steps above stay the same.

@@ -12,6 +12,7 @@ resources:
   - api.yaml
   - worker.yaml
   - migrate-job.yaml
+  - audit-export-cronjob.yaml
   - admin.yaml
   - network-policies.yaml
   - ingress.yaml

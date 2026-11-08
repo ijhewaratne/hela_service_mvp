@@ -57,6 +57,31 @@ tests:
             exp_annotations:
               summary: No successful backup and restore check in the last 26 hours.
 
+  - name: audit export failure and staleness
+    interval: 1m
+    input_series:
+      - series: hela_heartbeat_failing{instance="api-1",name="audit_export"}
+        values: 0 1
+      - series: hela_heartbeat_age_seconds{instance="api-1",name="audit_export"}
+        values: 0+600x60
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HelaAuditExportFailed
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: The latest audit export to write-once storage failed.
+              runbook: Run `python -m hela.cli verify-audit-export --bucket <bucket> --against-db`. A "does not continue" or "deletion or overwriting" error means possible tampering; treat it as a security incident.
+      - eval_time: 30m
+        alertname: HelaAuditExportStale
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: HelaAuditExportStale
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: The audit chain has not been exported to write-once storage for over 3 hours.
+
   - name: error rate and competing acceptances
     interval: 1m
     input_series:

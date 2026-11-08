@@ -1,8 +1,9 @@
 # Non-secret settings only. Secrets come from a Secret named hela-secrets that the platform's secret manager
 # creates (for example through an External Secrets operator). It must define:
 #   HELA_DATABASE_URL, HELA_REDIS_URL, HELA_S3_ACCESS_KEY, HELA_S3_SECRET_KEY, HELA_FIELD_KEYRING,
-#   HELA_LOOKUP_KEY_B64, HELA_JWT_KEYRING, HELA_METRICS_TOKEN
-# and, for the migration job only, a Secret hela-migration with HELA_MIGRATION_DATABASE_URL.
+#   HELA_LOOKUP_KEYRING, HELA_JWT_KEYRING, HELA_METRICS_TOKEN
+# and, for the migration job only, a Secret hela-migration with HELA_MIGRATION_DATABASE_URL; for the audit export
+# job only, a Secret hela-audit-export with HELA_S3_ACCESS_KEY / HELA_S3_SECRET_KEY for a write-only identity.
 # Never commit a Secret manifest with values.
 apiVersion: v1
 kind: ConfigMap
@@ -12,6 +13,7 @@ data:
   HELA_ENV: staging
   HELA_S3_ENDPOINT: https://objects.example.invalid
   HELA_S3_BUCKET: hela-evidence
+  HELA_AUDIT_EXPORT_BUCKET: hela-audit-export
   HELA_CLAMD_HOST: clamav.hela-platform.svc
   HELA_CLAMD_PORT: "3310"
   HELA_CORS_ORIGINS: '["https://admin.example.invalid"]'

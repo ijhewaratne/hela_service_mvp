@@ -86,3 +86,53 @@ def remaining_under_other_keys(engine: Engine, active: str) -> int:
         return sum(one(con, f'''SELECT count(*) AS n FROM {table} WHERE {col} IS NOT NULL
                                  AND {_KEY_ID_SQL.format(c=col)} <> :k''', k=active)['n']  # noqa: S608
                    for table, _pk, col, _ctx in ENCRYPTED_COLUMNS)
+
+
+# --- lookup-key rotation -----------------------------------------------------------------------------------------
+# Lookup hashes say which key made them ("<key id>:<hex>", or bare hex for the legacy key 'k1'). Account hashes are
+# long-lived and are recomputed from the encrypted phone number. OTP challenges, consent codes and the dev SMS
+# inbox are short-lived: they are reported here and simply expire, after which the old key can leave the ring.
+
+_LOOKUP_KEY_ID_SQL = "CASE WHEN position(':' in {c}) = 0 THEN 'k1' ELSE split_part({c}, ':', 1) END"
+
+LOOKUP_COLUMNS: list[tuple[str, str, str]] = [
+    # (table, column, which rows still matter)
+    ('users', 'phone_lookup', 'true'),
+    ('otp_challenges', 'phone_lookup', "created_at > now() - interval '1 day'"),
+    ('otp_challenges', 'code_hash', "consumed_at IS NULL AND expires_at > now()"),
+    ('beneficiary_consents', 'code_hash', "status = 'pending' AND expires_at > now()"),
+    ('dev_sms_inbox', 'phone_lookup', "created_at > now() - interval '1 day'"),
+]
+
+
+def lookup_key_status(engine: Engine) -> dict[str, Counter]:
+    out: dict[str, Counter] = {}
+    with tx(engine) as con:
+        for table, col, live in LOOKUP_COLUMNS:
+            rows = many(con, f'''SELECT {_LOOKUP_KEY_ID_SQL.format(c=col)} AS kid, count(*) AS n FROM {table}
+                                 WHERE {live} AND {col} <> '' GROUP BY 1''')  # noqa: S608 - fixed identifiers
+            out[f'{table}.{col}'] = Counter({r['kid']: r['n'] for r in rows})
+    return out
+
+
+def reindex_user_lookups(engine: Engine, cipher: FieldCipher, *, batch: int = 200,
+                         actor: str = 'operator-cli') -> int:
+    """Recompute account phone hashes under the active lookup key. Returns rows rewritten."""
+    active = cipher.active_lookup_key_id
+    other_key = f"({_LOOKUP_KEY_ID_SQL.format(c='phone_lookup')}) <> :k"
+    total = 0
+    while True:
+        with tx(engine) as con:
+            rows = many(con, f'''SELECT id, phone_enc FROM users WHERE {other_key}
+                                 ORDER BY id LIMIT :batch FOR UPDATE SKIP LOCKED''', k=active, batch=batch)  # noqa: S608
+            for r in rows:
+                phone = cipher.decrypt(r['phone_enc'], context='users.phone')
+                run(con, 'UPDATE users SET phone_lookup = :p, updated_at = now() WHERE id = :id',
+                    p=cipher.lookup_hash(phone, purpose='phone'), id=r['id'])
+        total += len(rows)
+        if len(rows) < batch:
+            break
+    with tx(engine) as con:
+        audit.record(con, actor_type='system', actor_id=actor, action='keys.lookup_reindexed', entity_type='keyring',
+                     entity_id=active, details={'rows': total})
+    return total

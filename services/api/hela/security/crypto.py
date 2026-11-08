@@ -14,7 +14,7 @@ import secrets
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from .keys import LEGACY_FIELD_KEY_ID, KeyProvider
+from .keys import LEGACY_FIELD_KEY_ID, LEGACY_LOOKUP_KEY_ID, KeyProvider
 
 V1, V2 = b'v1', b'v2'
 
@@ -69,8 +69,41 @@ class FieldCipher:
     def rewrap(self, blob: bytes, *, context: str) -> bytes:
         return self.encrypt(self.decrypt(blob, context=context), context=context)
 
+    # --- keyed lookup hashes -----------------------------------------------------------------------------------
+    # Stored as bare hex for the legacy key 'k1' and as "<key id>:<hex>" for any later key, so a stored hash says
+    # which key made it. Writes always use the active key; reads accept any key still in the ring.
+
+    @staticmethod
+    def _hmac(key: bytes, kid: str, value: str, purpose: str) -> str:
+        digest = hmac.new(key, f'{purpose}:{value}'.encode(), hashlib.sha256).hexdigest()
+        return digest if kid == LEGACY_LOOKUP_KEY_ID else f'{kid}:{digest}'
+
+    @property
+    def active_lookup_key_id(self) -> str:
+        return self._keys.active_lookup_key()[0]
+
     def lookup_hash(self, value: str, *, purpose: str) -> str:
-        return hmac.new(self._keys.lookup_key(), f'{purpose}:{value}'.encode(), hashlib.sha256).hexdigest()
+        """The hash to store, under the active lookup key."""
+        kid, key = self._keys.active_lookup_key()
+        return self._hmac(key, kid, value, purpose)
+
+    def lookup_candidates(self, value: str, *, purpose: str) -> list[str]:
+        """Every hash `value` may be stored under while keys rotate, the active key's first. Use with `= ANY(...)`."""
+        active = self.active_lookup_key_id
+        ring = self._keys.lookup_keys()
+        return [self._hmac(ring[k], k, value, purpose) for k in sorted(ring, key=lambda k: k != active)]
+
+    def lookup_matches(self, stored: str, value: str, *, purpose: str) -> bool:
+        """Constant-time check of `value` against a stored hash made with whichever ring key it names."""
+        kid = lookup_key_id_of(stored)
+        key = self._keys.lookup_keys().get(kid)
+        if key is None:
+            return False
+        return hmac.compare_digest(stored.encode(), self._hmac(key, kid, value, purpose).encode())
+
+
+def lookup_key_id_of(stored: str) -> str:
+    return stored.split(':', 1)[0] if ':' in stored else LEGACY_LOOKUP_KEY_ID
 
 
 def sha256_hex(value: str) -> str:

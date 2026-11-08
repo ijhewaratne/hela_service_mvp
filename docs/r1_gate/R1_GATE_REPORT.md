@@ -40,7 +40,7 @@ are a floor for engineering confidence, not a capacity claim; native Postgres on
 | INV-09 | No disabled category can be booked through any interface | DB `CHECK never_enable_forbidden`; `_bookable` on quote and request; eligibility; maker/checker | `test_disabled_and_forbidden_categories_cannot_be_booked`; `test_forbidden_categories_cannot_be_enabled_even_directly` |
 | INV-10 | No offline payment can be recorded as money held by Hela | `CHECK (platform_collected_funds = false)` | `test_settlement_disagreement_goes_to_finance` (the direct UPDATE is refused) |
 | INV-11 | An unsafe provider can be removed from matching immediately | Suspension needs no step-up, revokes pending offers and flags active jobs | `test_suspension_is_immediate_and_reinstatement_needs_step_up`; `test_suspension_revokes_pending_offer_and_redispatches` |
-| INV-12 | History is never silently rewritten | Triggers block UPDATE and DELETE on all event and history tables; the app role has no write grants. Audit sealed into `audit_chain` | `test_audit_chain_is_append_only_and_verifiable` (a privileged tamper is detected); `test_concurrent_audit_writers_seal_into_one_intact_chain`; load DB verified intact |
+| INV-12 | History is never silently rewritten | Triggers block UPDATE and DELETE on all event and history tables; the app role has no write grants. Audit sealed into `audit_chain` | `test_audit_chain_is_append_only_and_verifiable` (a privileged tamper is detected); `test_concurrent_audit_writers_seal_into_one_intact_chain`; load DB verified intact; an owner-level rewrite of the whole chain is caught by the write-once export (`test_rewritten_database_chain_no_longer_matches_the_export`) |
 
 ## 3. Acceptance scenarios (spec §19.2)
 
@@ -126,11 +126,11 @@ findings fixed during R1 (F-1 to F-7), and the open items. **Not an independent 
 ## 7. Open items before G1 sign-off (engineering)
 
 1. **CI has never run on GitHub**, because there's no remote yet (Q7). The workflow exists, with PostGIS, MinIO, lint, tests, pip-audit, SBOM and gitleaks.
-2. **KMS-backed keys.** Rotation is built: versioned field keys with online re-encryption, and Ed25519 (EdDSA) token signing with key ids ([runbook](../security/KEY_ROTATION_RUNBOOK.md)). The keys themselves still come from environment variables, and the phone lookup key cannot be rotated yet (V11).
+2. **KMS-backed keys.** Rotation is built: versioned field keys with online re-encryption, and Ed25519 (EdDSA) token signing with key ids ([runbook](../security/KEY_ROTATION_RUNBOOK.md)). The keys themselves still come from environment variables (V11). Lookup keys rotate with a dual-lookup period.
 3. ~~Policy-version administration API~~: done (migration 0006).
 4. **Retention periods and deletion** still need DEC-09. The register, legal holds (released only by a second person), the privacy-request workflow and the scoped own-data export are now built (migration 0007). The register is report-only, so nothing is deleted automatically.
 5. **WAL/PITR backups** in the target environment; the restore drill there (NFR-06).
-6. **Central log shipping**, and an off-site write-once (WORM) audit export (Q64). Metrics and the §17 alert rules are built and unit-tested ([`infra/monitoring`](../../infra/monitoring/README.md)); where Prometheus and Alertmanager run, and who is paged, waits for DEC-08.
+6. **Central log shipping** (Q64). The write-once audit export is built and tested against local MinIO with Object Lock ([runbook](../security/AUDIT_EXPORT_RUNBOOK.md)); the real bucket and retention period wait for DEC-08 and DEC-09. Metrics and the §17 alert rules are built and unit-tested ([`infra/monitoring`](../../infra/monitoring/README.md)); where Prometheus and Alertmanager run, and who is paged, waits for DEC-08.
 7. **Independent security assessment** (NFR-07, §19.1).
 8. Confirm the readings of **AT-012** (shared customer persona) and **AT-030** (no access path exists).
 9. Matching uses straight-line distance only (Q44); no ETA is shown anywhere.

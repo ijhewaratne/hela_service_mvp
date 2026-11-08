@@ -99,6 +99,19 @@ groups:
         labels: {severity: critical}
         annotations:
           summary: No successful backup and restore check in the last 26 hours.
+      - alert: HelaAuditExportFailed
+        expr: max(hela_heartbeat_failing{name="audit_export"}) == 1
+        for: 0m
+        labels: {severity: critical}
+        annotations:
+          summary: The latest audit export to write-once storage failed.
+          runbook: Run `python -m hela.cli verify-audit-export --bucket <bucket> --against-db`. A "does not continue" or "deletion or overwriting" error means possible tampering; treat it as a security incident.
+      - alert: HelaAuditExportStale
+        expr: max(hela_heartbeat_age_seconds{name="audit_export"}) > 3 * 3600 or absent(hela_heartbeat_age_seconds{name="audit_export"})
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: The audit chain has not been exported to write-once storage for over 3 hours.
 
   - name: hela-marketplace-and-safety
     rules:

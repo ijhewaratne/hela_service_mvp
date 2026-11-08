@@ -26,11 +26,11 @@ def latest_message(query: InboxQuery, x_dev_inbox_token: str | None = Header(Non
             or not constant_time_equal(x_dev_inbox_token, expected):
         raise ApiError(404, 'NOT_FOUND', 'error.not_found')
     try:
-        lookup = svc.cipher.lookup_hash(normalize_phone(query.phone), purpose='phone')
+        lookup = svc.cipher.lookup_candidates(normalize_phone(query.phone), purpose='phone')
     except ValueError:
         raise ApiError(404, 'NOT_FOUND', 'error.not_found') from None
     with tx(svc.engine) as con:
-        row = one(con, '''SELECT body, created_at FROM dev_sms_inbox WHERE phone_lookup = :p
+        row = one(con, '''SELECT body, created_at FROM dev_sms_inbox WHERE phone_lookup = ANY(:p)
                           AND created_at > now() - interval '10 minutes' ORDER BY id DESC LIMIT 1''', p=lookup)
     if not row:
         raise ApiError(404, 'NOT_FOUND', 'error.not_found')
