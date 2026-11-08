@@ -44,7 +44,7 @@ class Strings {
     'common.sign_out': 'Sign out',
     'common.reason': 'Reason',
     'common.ref': 'Reference',
-    'error.offline': 'No connection. Nothing was changed. Try again.',
+    'error.offline': 'Connection lost. The action may have reached the server. Check the latest status before retrying.',
     'support.title': 'Report a problem',
     'support.body': 'A person reviews every report. Hela Service is not an emergency service.',
     'support.kind': 'What happened?',
