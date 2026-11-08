@@ -121,10 +121,11 @@ void main() {
     expect(find.textContaining('Synthetic Lane'), findsNothing);
     expect(find.byKey(const Key('countdown')), findsOneWidget);
 
-    // First tap: the response is lost. The app says nothing changed and does not pretend it got the job.
+    // First tap: the response is lost. The app must not pretend it got the job;
+    // the server may already have accepted it, so the outcome is uncertain.
     await tester.tap(find.widgetWithText(FilledButton, 'Accept'));
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.textContaining('No connection'), findsOneWidget);
+    expect(find.textContaining('may have reached the server'), findsOneWidget);
     // Retry uses the same idempotency key, so the server returns the same booking instead of a second one.
     await tester.tap(find.widgetWithText(FilledButton, 'Accept'));
     await tester.pump();
