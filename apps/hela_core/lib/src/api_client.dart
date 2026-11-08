@@ -22,13 +22,17 @@ class ApiException implements Exception {
 
   /// Network failure: no server answer. The app must never assume the action happened (NFR-08).
   factory ApiException.offline() =>
-      ApiException(0, 'OFFLINE', 'error.offline', 'No connection. Nothing was changed. Try again.', '-', true, const {});
+      ApiException(0, 'OFFLINE', 'error.offline',
+          'Connection lost. The action may have reached the server. Check the latest status before retrying.',
+          '-', true, const {});
 
   List<String> get reasonCodes => (details['reason_codes'] as List?)?.cast<String>() ?? const [];
 
   @override
   String toString() => '$code: $message (ref $correlationId)';
 }
+
+enum _RefreshResult { refreshed, invalid, unavailable }
 
 /// Customer/provider API client.
 ///
@@ -46,7 +50,7 @@ class HelaApi {
   final String base;
   final Duration timeout;
   String? _access;
-  Completer<bool>? _refreshing;
+  Completer<_RefreshResult>? _refreshing;
   void Function()? onSignedOut;
 
   bool get hasSession => _access != null;
@@ -106,7 +110,17 @@ class HelaApi {
       return jsonDecode(utf8.decode(res.bodyBytes));
     }
     final err = _toError(res);
-    if (err.code == 'TOKEN_INVALID' && retry != null && await _refresh()) return retry();
+    if (err.code == 'TOKEN_INVALID' && retry != null) {
+      final outcome = await _refresh();
+      if (outcome == _RefreshResult.refreshed) return retry();
+      if (outcome == _RefreshResult.unavailable) {
+        // A timeout, gateway error or rate limit is not proof that the session was revoked.
+        // Do not erase the stored token or silently repeat the original state-changing request.
+        throw ApiException(0, 'AUTH_UNAVAILABLE', 'error.auth_unavailable',
+            'Your session could not be verified right now. Please check your connection and retry.',
+            err.correlationId, true, const {});
+      }
+    }
     if (const {'SESSION_REVOKED', 'TOKEN_INVALID', 'ACCOUNT_INACTIVE', 'REFRESH_REUSED'}.contains(err.code)) {
       await signOutLocally();
     }
@@ -124,30 +138,38 @@ class HelaApi {
     }
   }
 
-  /// Restores a session at app start from the stored refresh token. Returns false when sign-in is needed.
-  Future<bool> resume() => _refresh();
+  /// Restores a session at app start from the stored refresh token.
+  /// A temporary outage leaves the token in secure storage so login can recover later.
+  Future<bool> resume() async => await _refresh() == _RefreshResult.refreshed;
 
-  Future<bool> _refresh() {
+  Future<_RefreshResult> _refresh() {
     final inFlight = _refreshing;
     if (inFlight != null) return inFlight.future;
-    final done = Completer<bool>();
+    final done = Completer<_RefreshResult>();
     _refreshing = done;
     () async {
       try {
         final refresh = await store.readRefreshToken();
-        if (refresh == null) return done.complete(false);
+        if (refresh == null) return done.complete(_RefreshResult.invalid);
         final res = await _http
             .post(Uri.parse('$base/v1/auth/refresh'),
                 headers: {'Content-Type': 'application/json'}, body: jsonEncode({'refresh_token': refresh}))
             .timeout(timeout);
         if (res.statusCode != 200) {
+          // Only a definitive client/auth rejection should destroy a session.
+          // A temporary server outage, timeout or rate limit is not such evidence.
+          if (res.statusCode == 408 || res.statusCode == 429 || res.statusCode >= 500) {
+            return done.complete(_RefreshResult.unavailable);
+          }
           await signOutLocally();
-          return done.complete(false);
+          return done.complete(_RefreshResult.invalid);
         }
         await _adopt(jsonDecode(res.body) as Map<String, dynamic>);
-        done.complete(true);
+        done.complete(_RefreshResult.refreshed);
       } catch (_) {
-        done.complete(false); // offline: keep the stored token, try again later
+        // Preserve the stored token on transport failures and ambiguous responses.
+        // Do not assume a state-changing operation did not reach the server.
+        done.complete(_RefreshResult.unavailable);
       } finally {
         _refreshing = null;
       }
