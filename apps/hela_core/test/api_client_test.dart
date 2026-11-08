@@ -40,6 +40,91 @@ void main() {
     expect(store.token, 'R2');
   });
 
+  test('temporary refresh failures keep the user signed in and allow a later retry', () async {
+    for (final temporaryStatus in [429, 503]) {
+      var serviceAvailable = false;
+      var refreshes = 0;
+      final store = MemoryTokenStore();
+      final api = HelaApi(store: store, baseUrl: 'http://api', client: MockClient((req) async {
+        if (req.url.path == '/v1/auth/otp/verify') {
+          return json(200, {'access_token': 'A1', 'refresh_token': 'R1', 'session_id': 's'});
+        }
+        if (req.url.path == '/v1/auth/refresh') {
+          refreshes++;
+          if (!serviceAvailable) return json(temporaryStatus, envelope('TEMPORARY_ERROR'));
+          return json(200, {'access_token': 'A2', 'refresh_token': 'R2', 'session_id': 's'});
+        }
+        return req.headers['Authorization'] == 'Bearer A2'
+            ? json(200, {'ok': true})
+            : json(401, envelope('TOKEN_INVALID'));
+      }));
+      await api.verifyOtp('+9477', 'cid', '123456');
+      await expectLater(api.get('/v1/me'),
+          throwsA(isA<ApiException>().having((e) => e.code, 'code', 'AUTH_UNAVAILABLE')));
+      expect(store.token, 'R1');
+      expect(api.hasSession, isTrue);
+      expect(refreshes, 1);
+
+      serviceAvailable = true;
+      expect(await api.get('/v1/me'), {'ok': true});
+      expect(store.token, 'R2');
+      expect(api.hasSession, isTrue);
+      expect(refreshes, 2);
+    }
+  });
+
+  test('network interruption during refresh retains the session', () async {
+    final store = MemoryTokenStore();
+    final api = HelaApi(store: store, baseUrl: 'http://api', client: MockClient((req) async {
+      if (req.url.path == '/v1/auth/otp/verify') {
+        return json(200, {'access_token': 'A1', 'refresh_token': 'R1', 'session_id': 's'});
+      }
+      if (req.url.path == '/v1/auth/refresh') throw http.ClientException('connection reset');
+      return json(401, envelope('TOKEN_INVALID'));
+    }));
+    await api.verifyOtp('+9477', 'cid', '123456');
+    await expectLater(api.get('/v1/me'),
+        throwsA(isA<ApiException>().having((e) => e.code, 'code', 'AUTH_UNAVAILABLE')));
+    expect(store.token, 'R1');
+    expect(api.hasSession, isTrue);
+  });
+
+  test('an invalid refresh token still ends the session', () async {
+    final store = MemoryTokenStore();
+    final api = HelaApi(store: store, baseUrl: 'http://api', client: MockClient((req) async {
+      if (req.url.path == '/v1/auth/otp/verify') {
+        return json(200, {'access_token': 'A1', 'refresh_token': 'R1', 'session_id': 's'});
+      }
+      if (req.url.path == '/v1/auth/refresh') return json(401, envelope('REFRESH_INVALID'));
+      return json(401, envelope('TOKEN_INVALID'));
+    }));
+    await api.verifyOtp('+9477', 'cid', '123456');
+    await expectLater(api.get('/v1/me'), throwsA(isA<ApiException>()));
+    expect(store.token, isNull);
+    expect(api.hasSession, isFalse);
+  });
+
+  test('startup refresh can recover after a temporary server failure', () async {
+    var online = false;
+    final store = MemoryTokenStore()..token = 'R1';
+    final api = HelaApi(store: store, baseUrl: 'http://api', client: MockClient((req) async {
+      if (!online) return json(503, envelope('SERVER_ERROR'));
+      return json(200, {'access_token': 'A2', 'refresh_token': 'R2', 'session_id': 's'});
+    }));
+    expect(await api.resume(), isFalse);
+    expect(store.token, 'R1');
+    online = true;
+    expect(await api.resume(), isTrue);
+    expect(store.token, 'R2');
+  });
+
+  test('offline messaging never claims an unconfirmed command was not processed', () {
+    final error = ApiException.offline();
+    expect(error.message, contains('may have reached the server'));
+    expect(error.message.toLowerCase(), isNot(contains('nothing was changed')));
+    expect(Strings('en').t('error.offline'), contains('may have reached the server'));
+  });
+
   test('a wrong code is a plain error: no refresh, no sign-out', () async {
     var calls = 0;
     var signedOut = false;
