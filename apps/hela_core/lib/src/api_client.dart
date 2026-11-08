@@ -34,6 +34,9 @@ class ApiException implements Exception {
 
 enum _RefreshResult { refreshed, invalid, unavailable }
 
+/// Distinguishes connectivity failures from invalid or expired sessions.
+enum SessionRestoreStatus { authenticated, needsSignIn, temporarilyUnavailable }
+
 /// Customer/provider API client.
 ///
 /// * Access token: memory only, 10 minutes. Refresh token: [TokenStore] (Android Keystore-backed in the apps).
@@ -140,7 +143,17 @@ class HelaApi {
 
   /// Restores a session at app start from the stored refresh token.
   /// A temporary outage leaves the token in secure storage so login can recover later.
-  Future<bool> resume() async => await _refresh() == _RefreshResult.refreshed;
+  Future<SessionRestoreStatus> resumeStatus() async {
+    final result = await _refresh();
+    return switch (result) {
+      _RefreshResult.refreshed => SessionRestoreStatus.authenticated,
+      _RefreshResult.invalid => SessionRestoreStatus.needsSignIn,
+      _RefreshResult.unavailable => SessionRestoreStatus.temporarilyUnavailable,
+    };
+  }
+
+  /// Backwards-compatible boolean form; callers needing offline retry use resumeStatus().
+  Future<bool> resume() async => await resumeStatus() == SessionRestoreStatus.authenticated;
 
   Future<_RefreshResult> _refresh() {
     final inFlight = _refreshing;

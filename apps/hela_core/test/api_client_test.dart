@@ -125,6 +125,15 @@ void main() {
     expect(Strings('en').t('error.offline'), contains('may have reached the server'));
   });
 
+  test('resumeStatus reports temporary outage without forgetting credentials', () async {
+    final store = MemoryTokenStore()..token = 'R1';
+    final api = HelaApi(store: store, baseUrl: 'http://api', client: MockClient((req) async {
+      return json(503, envelope('SERVICE_UNAVAILABLE'));
+    }));
+    expect(await api.resumeStatus(), SessionRestoreStatus.temporarilyUnavailable);
+    expect(store.token, 'R1');
+  });
+
   test('a wrong code is a plain error: no refresh, no sign-out', () async {
     var calls = 0;
     var signedOut = false;

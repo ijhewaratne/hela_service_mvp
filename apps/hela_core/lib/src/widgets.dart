@@ -424,3 +424,51 @@ class _ReportProblemScreenState extends State<ReportProblemScreen> {
     );
   }
 }
+
+
+/// Recovery for a saved session that cannot be checked due to a connection/server outage.
+class SessionRecoveryScreen extends StatelessWidget {
+  const SessionRecoveryScreen({super.key, required this.onRetry, required this.onChooseAccount});
+
+  final VoidCallback onRetry;
+  final VoidCallback onChooseAccount;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = Strings.of(context);
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Icon(Icons.wifi_off_outlined, size: 48),
+                  const SizedBox(height: 16),
+                  ScreenTitle(s.t('auth.session_unavailable_title')),
+                  const SizedBox(height: 12),
+                  Text(s.t('auth.session_unavailable')),
+                  const SizedBox(height: 24),
+                  FilledButton(
+                    key: const Key('retry-session'),
+                    onPressed: onRetry,
+                    child: Text(s.t('auth.session_retry')),
+                  ),
+                  TextButton(
+                    key: const Key('choose-other-account'),
+                    onPressed: onChooseAccount,
+                    child: Text(s.t('auth.sign_in_other')),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
