@@ -131,15 +131,22 @@ def latest_code(db, cipher, phone):
 
 
 class TotpClock:
-    """Each TOTP time step can be used once per admin. Hand out codes for distinct steps within the
-    server's +/-1 step window so one test can log in and step up without waiting 30 seconds."""
+    """Each TOTP time step can be used once per admin. Hand out codes for distinct, unused steps within the
+    server's +/-1 step window, so one test can log in and step up several times without waiting 30 seconds.
+    Steps are tracked (not fixed offsets), so crossing a 30-second boundary mid-test cannot reuse a step."""
 
     def __init__(self, secret):
         self.totp = pyotp.TOTP(secret)
-        self.offsets = [0, 30, -30]
+        self.used: set[int] = set()
 
     def next(self):
-        return self.totp.at(time.time() + self.offsets.pop(0))
+        now = int(time.time() // 30)
+        for step in (now, now + 1, now - 1):
+            if step not in self.used:
+                self.used.add(step)
+                return self.totp.at(step * 30)
+        time.sleep(30 - time.time() % 30 + 0.1)        # all three used: wait for a new step
+        return self.next()
 
 
 @pytest.fixture
