@@ -39,6 +39,12 @@ spec:
       labels: {app.kubernetes.io/name: vector-agent}
     spec:
       serviceAccountName: vector-agent
+      # Accepted exception (security scan): node log files under /var/log/pods are root-owned, so the agent runs as
+      # root. It is contained instead: no capabilities, no privilege escalation, read-only root filesystem, and the
+      # host log paths mounted read-only. Its only writable host path is its own checkpoint directory.
+      securityContext:   # nosemgrep: yaml.kubernetes.security.run-as-non-root.run-as-non-root
+        runAsNonRoot: false
+        seccompProfile: {type: RuntimeDefault}
       containers:
         - name: vector
           image: vector

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hela_core/hela_core.dart';
 import 'package:hela_customer/booking_flow.dart';
+import 'package:hela_customer/bookings.dart';
 import 'package:hela_customer/main.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -143,5 +144,20 @@ void main() {
     expect(find.byKey(const Key('pin')), findsOneWidget);
     expect(find.text('4821'), findsOneWidget);
     expect(find.textContaining('Provider 001'), findsOneWidget);
+  });
+
+  testWidgets('booking screen scrolls on a small phone with large text: cancelling stays reachable', (tester) async {
+    tester.view.physicalSize = const Size(1080, 1920);   // 360 x 640 dp
+    tester.view.devicePixelRatio = 3;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+    addTearDown(tester.view.reset);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient(FakeBackend().handle));
+    await tester.pumpWidget(MaterialApp(home: BookingScreen(api: api, bookingId: 'b1')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);   // no overflow
+    final cancel = find.widgetWithText(FilledButton, 'Cancel booking (no fee)');
+    await tester.scrollUntilVisible(cancel, 200, scrollable: find.byType(Scrollable).first);
+    expect(cancel.hitTestable(), findsOneWidget);
   });
 }

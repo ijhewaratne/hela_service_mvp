@@ -62,7 +62,16 @@ Uploads made while it is unavailable are stored encrypted as `pending` and canno
 `python -m hela.cli rescan-evidence` marks them clean. Run `python -m hela.cli expire-verifications` daily.
 
 **Tests** (needs the Compose stack running): `cd services/api && .venv/bin/python -m pytest`
-(112 tests, including real OS-process races, a SIGKILL crash test and real ClamAV. Add `-m "not multiprocess"` for a faster run.)
+(167 tests, including real OS-process races, a SIGKILL crash test and real ClamAV. Add `-m "not multiprocess"` for a faster run.)
+
+**App end-to-end tests** (the real Flutter apps against the real local API and worker, no fakes; synthetic data):
+with the API started with a sandbox inbox token as above and the worker running,
+`HELA_DEV_INBOX_TOKEN=<the same token> scripts/app_e2e.sh` runs both apps as macOS desktop builds, so no
+emulator or phone is needed. The customer test signs up, accepts the draft notices, books cleaning and sees the
+check-in code the server issued after a real provider accepts. The provider test accepts a real offer (the address
+appears only after acceptance), goes on the way, arrives, checks in with the customer's code and finishes the job.
+The same Dart code runs on Android. TalkBack, the Android Keystore, the camera and push notifications still
+need a device.
 
 **Load test and restore drill:** see `services/api/tests/load/` and `scripts/backup_restore_check.sh`. Results are in the R1 gate report.
 
@@ -165,6 +174,12 @@ address → quote → accept terms → request (beneficiary consent if booking f
   manifests with default-deny networking and Pod Security `restricted`. See [`infra/deploy/README.md`](infra/deploy/README.md).
 - **Accessibility (§16):** automated checks for touch targets, labels, contrast and 200% text on a small phone
   (Flutter), and axe-core checks on the admin console pages. Screen-reader testing on a real device is still open.
+  The app end-to-end run found that the job and booking screens did not scroll, so on a small phone or with
+  large text the actions at the bottom were cut off. That is fixed, and a widget test at 360 dp and 1.5× text
+  covers it.
+- **Security scans:** ruff's bandit rules (`S`) on every lint run; Semgrep rule packs (Python, secrets,
+  Dockerfile, Kubernetes, TypeScript) with no open findings; `pip-audit` and `pnpm audit` report no known
+  vulnerabilities. These are internal checks, not an independent assessment.
 
 ### Known gaps (tracked for the R1 gate)
 

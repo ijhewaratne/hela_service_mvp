@@ -157,3 +157,18 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Semgrep (rule packs only; no login, no metrics)
+        run: |
+          pip install semgrep==1.136.0
+          semgrep scan --metrics=off --error \
+            --config p/python --config p/secrets --config p/dockerfile --config p/kubernetes --config p/typescript \
+            --exclude node_modules --exclude dist --exclude build --exclude .venv \
+            services infra apps/admin/src apps/admin/Dockerfile

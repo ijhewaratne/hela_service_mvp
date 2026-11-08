@@ -158,7 +158,7 @@ class NotificationsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('Messages')),
-        body: AsyncSection<List<dynamic>>(
+        body: SingleChildScrollView(child: AsyncSection<List<dynamic>>(
           load: () async => await api.get('/v1/me/notifications') as List,
           builder: (context, list, _) => Column(children: [
             for (final n in list.cast<Map<String, dynamic>>())
@@ -168,6 +168,6 @@ class NotificationsScreen extends StatelessWidget {
                 status: n['status'] as String,
               ),
           ]),
-        ),
+        ))
       );
 }

@@ -12,7 +12,7 @@
 ```bash
 docker compose -f infra/docker/compose.yml up -d --wait
 cd services/api
-.venv/bin/python -m pytest                          # 112 tests, includes multi-process and real ClamAV
+.venv/bin/python -m pytest                          # 167 tests, includes multi-process and real ClamAV
 .venv/bin/python -m pytest -m multiprocess          # just the OS-process race and crash tests
 python tests/load/seed_load.py /tmp/tokens.json     # isolated hela_load database (30 providers, 100 customers)
 # start the API with 4 workers and 2 `python -m hela.worker` processes against hela_load, then:
@@ -92,7 +92,7 @@ Load: 30 providers, 100 customers, 4 API processes, 2 workers, 40 Locust users (
 | NFR-08 | Never show an unconfirmed accepted state | `booking_id` is shown only once a booking row exists; idempotent retries | | ✅ |
 | NFR-10 | Every privileged action linked to actor, event and policy version | Audit with correlation ID; approvals store `policy_id`; quotes store policy and price versions | | ✅ |
 | NFR-11 | Load test ≥ 10× pilot peak | 50/min = 10× the Q71 target of 5/min | | ✅ |
-| NFR-12 | Accessibility | Automated: touch targets, labels, contrast and 200% text on a 360 dp phone (Flutter guideline tests); axe-core on 8 admin pages; contrast computed for both admin themes | | 🟡 automated only; TalkBack testing on a device open |
+| NFR-12 | Accessibility | Automated: touch targets, labels, contrast and 200% text on a 360 dp phone (Flutter guideline tests); axe-core on 8 admin pages; contrast computed for both admin themes | | 🟡 automated, plus both apps end to end against the live API on macOS desktop (`scripts/app_e2e.sh`), which found and fixed a non-scrolling job screen; TalkBack testing on a device open |
 | NFR-13 | Portability | Cloud-neutral images and Kustomize skeleton, schema-checked; not deployed (Q67) | | 🟡 |
 | NFR-04, 07, 09 | Uptime, pen test, localisation | not measurable in R1 locally | | ❌ open |
 
@@ -122,6 +122,8 @@ can send a message twice. Before go-live, pick a vendor that accepts an idempote
 
 See [`docs/security/ASVS_R1_CHECKLIST.md`](../security/ASVS_R1_CHECKLIST.md): chapter-level self-assessment, seven
 findings fixed during R1 (F-1 to F-7), and the open items. **Not an independent assessment.**
+Internal scans: ruff `S` rules, Semgrep (Python, secrets, Dockerfile, Kubernetes, TypeScript packs; no open
+findings), `pip-audit` and `pnpm audit` (no known vulnerabilities on 2026-11-08), gitleaks in CI.
 
 ## 7. Open items before G1 sign-off (engineering)
 

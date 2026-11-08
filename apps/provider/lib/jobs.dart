@@ -72,7 +72,7 @@ class _JobScreenState extends State<JobScreen> {
               .push(MaterialPageRoute(builder: (_) => ReportProblemScreen(api: widget.api, bookingId: widget.bookingId))),
         ),
       ]),
-      body: AsyncSection<Map<String, dynamic>>(
+      body: SingleChildScrollView(child: AsyncSection<Map<String, dynamic>>(
         load: () async => await widget.api.get('/v1/bookings/${widget.bookingId}') as Map<String, dynamic>,
         builder: (context, b, reload) {
           final status = b['status'] as String;
@@ -129,7 +129,7 @@ class _JobScreenState extends State<JobScreen> {
             ],
           ]);
         },
-      ),
+      ))
     );
   }
 }

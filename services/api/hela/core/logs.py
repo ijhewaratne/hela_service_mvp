@@ -69,6 +69,15 @@ class RedactingFilter(logging.Filter):
         return True
 
 
+def _extras(record: logging.LogRecord) -> dict:
+    """Fields passed with `extra=`, masked unless numeric."""
+    out = {}
+    for key, value in vars(record).items():
+        if key not in _RESERVED and key not in ('correlation_id', 'request_correlation_id'):
+            out[key] = value if isinstance(value, (int, float, bool)) or value is None else redact(str(value))
+    return out
+
+
 class JsonFormatter(logging.Formatter):
     def __init__(self, service: str):
         super().__init__()
@@ -85,15 +94,19 @@ class JsonFormatter(logging.Formatter):
         }
         if record.exc_text:
             doc['exception'] = record.exc_text
-        for key, value in vars(record).items():
-            if key not in _RESERVED and key not in doc and key not in ('correlation_id', 'request_correlation_id'):
-                doc[key] = value if isinstance(value, (int, float, bool)) or value is None else redact(str(value))
+        for key, value in _extras(record).items():
+            doc.setdefault(key, value)
         return json.dumps(doc, ensure_ascii=False)
 
 
 class TextFormatter(logging.Formatter):
     def __init__(self):
         super().__init__('%(asctime)s %(levelname)s %(name)s [%(correlation_id)s] %(message)s')
+
+    def format(self, record: logging.LogRecord) -> str:
+        line = super().format(record)
+        extras = _extras(record)
+        return line + ''.join(f' {k}={v}' for k, v in extras.items()) if extras else line
 
 
 class _Stdout:

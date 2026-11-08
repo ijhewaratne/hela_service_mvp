@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hela_core/hela_core.dart';
+import 'package:hela_provider/jobs.dart';
 import 'package:hela_provider/main.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -154,5 +155,23 @@ void main() {
     expect(backend.status, 'completed_pending_confirmation');
     expect(backend.transitions.map((t) => t['expected_version']), [1, 2, 3, 3, 4]); // version-checked every time
     expect(find.byKey(const Key('address')), findsNothing); // address hidden once work is done
+  });
+
+  testWidgets('job screen scrolls on a small phone with large text: every action stays reachable', (tester) async {
+    // 360 x 640 logical pixels at 1.5x text. Before the fix, the body did not scroll and the actions at the bottom
+    // were cut off (found by the macOS end-to-end run).
+    tester.view.physicalSize = const Size(1080, 1920);
+    tester.view.devicePixelRatio = 3;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+    addTearDown(tester.view.reset);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final backend = FakeBackend()..status = 'en_route';
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient(backend.handle));
+    await tester.pumpWidget(MaterialApp(home: JobScreen(api: api, bookingId: 'b1')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);   // no overflow
+    final leave = find.widgetWithText(FilledButton, 'Leave for safety / cannot attend');
+    await tester.scrollUntilVisible(leave, 200, scrollable: find.byType(Scrollable).first);
+    expect(leave.hitTestable(), findsOneWidget);
   });
 }
