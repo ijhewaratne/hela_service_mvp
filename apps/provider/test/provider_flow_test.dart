@@ -90,6 +90,28 @@ class StubLanguagePref extends LanguagePref {
 }
 
 void main() {
+  testWidgets('profile lookup outage does not show provider application', (tester) async {
+    var down = true;
+    final backend = FakeBackend();
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient((req) async {
+      if (req.method == 'GET' && req.url.path == '/v1/provider/me' && down) {
+        return backend._err('TEMPORARY_UNAVAILABLE', 503);
+      }
+      return backend.handle(req);
+    }));
+    await tester.pumpWidget(ProviderApp(api: api, showMaps: false, offerPoll: const Duration(hours: 1)));
+    await tester.pumpAndSettle();
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('retry-provider-profile')), findsOneWidget);
+    expect(find.text('Work with Hela'), findsNothing);
+
+    down = false;
+    await tester.tap(find.byKey(const Key('retry-provider-profile')));
+    await tester.pumpAndSettle();
+    expect(find.text('Job offers'), findsOneWidget);
+  });
+
   testWidgets('saved provider session survives a startup outage and recovers on retry', (tester) async {
     var online = false;
     final backend = FakeBackend();

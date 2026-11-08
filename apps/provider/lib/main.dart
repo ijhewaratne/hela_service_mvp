@@ -130,11 +130,14 @@ class _ProviderHomeState extends State<ProviderHome> {
   Future<void> _load() async {
     try {
       final p = await widget.api.get('/v1/provider/me') as Map<String, dynamic>;
+      if (!mounted) return;
       setState(() {
         _profile = p;
+        _error = null;
         _checked = true;
       });
     } on ApiException catch (e) {
+      if (!mounted) return;
       setState(() {
         _checked = true;
         _profile = null;
@@ -146,8 +149,38 @@ class _ProviderHomeState extends State<ProviderHome> {
   @override
   Widget build(BuildContext context) {
     if (!_checked) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (_profile == null && _error != null) {
+      // A failed lookup does not mean the user is a new provider. Never suggest reapplying during an outage.
+      return Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ErrorBanner(_error),
+                    FilledButton(
+                      key: const Key('retry-provider-profile'),
+                      onPressed: () {
+                        setState(() => _checked = false);
+                        _load();
+                      },
+                      child: const Text('Retry loading provider profile'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     if (_profile == null) {
-      return Scaffold(body: SafeArea(child: Column(children: [ErrorBanner(_error), Expanded(child: ApplyScreen(api: widget.api, onApplied: _load))])));
+      return Scaffold(body: SafeArea(child: ApplyScreen(api: widget.api, onApplied: _load)));
     }
     final pages = [
       OffersScreen(api: widget.api, pollEvery: widget.offerPoll),
