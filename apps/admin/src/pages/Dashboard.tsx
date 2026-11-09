@@ -24,21 +24,51 @@ export function Dashboard() {
 
   return (
     <>
-      <h1>Operations</h1>
+      <header className="ops-header">
+        <div>
+          <h1>Operations</h1>
+          <p className="muted">Review outstanding work first. Counts reflect the latest successful API response, not live real-time monitoring.</p>
+        </div>
+        <button className="btn btn-ghost" type="button" onClick={() => { void queue.reload(); void health.reload(); }}>
+          Refresh queues
+        </button>
+      </header>
       <ErrorBanner error={queue.error || health.error} />
-      <div className="grid">
-        <Section title="System health" actions={<button className="btn btn-ghost" onClick={() => { void queue.reload(); void health.reload(); }}>Refresh</button>}>
-          {health.data && (
-            <dl className="kv">
-              {Object.entries(health.data).map(([k, v]) => (<Fragment key={k}><dt>{k}</dt><dd><Badge value={v} /></dd></Fragment>))}
-              <dt>Dead jobs</dt><dd><Badge value={q ? String(q.dead_jobs.length) : '…'} /></dd>
-            </dl>
-          )}
-        </Section>
-        <Section title="Open alerts"><div className="stat">{q?.alerts.length ?? '…'}</div></Section>
-        <Section title="Searching for a provider"><div className="stat">{q?.searching.length ?? '…'}</div></Section>
-        <Section title="No provider found"><div className="stat">{q?.unfulfilled_or_expired.length ?? '…'}</div></Section>
-      </div>
+      {queue.error && <p role="status" className="muted">The last queue refresh failed; any visible counts may be stale.</p>}
+      <section aria-label="Priorities requiring attention">
+        <h2 className="ops-subheading">Review first</h2>
+        <div className="triage-grid" aria-live="polite">
+          <div className="triage-card triage-urgent">
+            <span>Open operational alerts</span>
+            <strong data-testid="alerts-count">{q?.alerts.length ?? '—'}</strong>
+            <small>Review urgency and responsible team before closing an alert.</small>
+          </div>
+          <div className="triage-card">
+            <span>Bookings needing attention</span>
+            <strong data-testid="booking-attention-count">{q?.bookings_needing_attention.length ?? '—'}</strong>
+            <small>Disputed, held or awaiting customer confirmation.</small>
+          </div>
+          <div className="triage-card">
+            <span>Requests without a provider</span>
+            <strong data-testid="unfulfilled-count">{q?.unfulfilled_or_expired.length ?? '—'}</strong>
+            <small>Never describe these requests as confirmed.</small>
+          </div>
+          <div className="triage-card">
+            <span>Awaiting beneficiary consent</span>
+            <strong data-testid="consent-count">{q?.awaiting_beneficiary.length ?? '—'}</strong>
+            <small>Do not dispatch while authorization is pending.</small>
+          </div>
+        </div>
+      </section>
+      <Section title="System health">
+        {health.data ? (
+          <dl className="kv">
+            {Object.entries(health.data).map(([k, v]) => (<Fragment key={k}><dt>{k}</dt><dd><Badge value={v} /></dd></Fragment>))}
+            <dt>Dead jobs</dt><dd><Badge value={q ? String(q.dead_jobs.length) : '…'} /></dd>
+            <dt>Provider search in progress</dt><dd>{q?.searching.length ?? '—'}</dd>
+          </dl>
+        ) : <p className="muted">System health is not available yet.</p>}
+      </Section>
 
       <Section title="Alerts needing a person">
         <Table rows={q?.alerts} empty="No open alerts." columns={[

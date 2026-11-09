@@ -50,6 +50,24 @@ class _BookingFlowState extends State<BookingFlow> {
     });
   }
 
+  // Returning to an earlier step invalidates the quote; it must be re-priced before any submission.
+  // An uncertain response on the review step does NOT invalidate the idempotency key.
+  void _editPreviousStep() {
+    if (_step < 1) return;
+    setState(() {
+      _step -= 1;
+      _quote = null;
+      _termsAccepted = false;
+      _idempotencyKey = null;
+    });
+  }
+
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
+
   Future<void> _confirm() async {
     final q = _quote!;
     await widget.api.post('/v1/quotes/${q['quote_id']}/accept', {'policy_version': q['policy_version']});
@@ -69,13 +87,7 @@ class _BookingFlowState extends State<BookingFlow> {
   Widget build(BuildContext context) {
     final stepMin = c['min_duration_minutes'] as int;
     final stepMax = c['max_duration_minutes'] as int;
-    return Scaffold(
-      appBar: AppBar(title: Text(c['display_name'] as String)),
-      body: Stepper(
-        currentStep: _step,
-        onStepTapped: (i) => i < _step ? setState(() => _step = i) : null,
-        controlsBuilder: (_, _) => const SizedBox.shrink(),
-        steps: [
+    final steps = <Step>[
           Step(
             title: const Text('Address'),
             content: AsyncSection<List<dynamic>>(
@@ -224,7 +236,44 @@ class _BookingFlowState extends State<BookingFlow> {
                     ActionButton(label: 'Request this service', enabled: _termsAccepted, onPressed: _confirm),
                   ]),
           ),
-        ],
+    ];
+    return Scaffold(
+      appBar: AppBar(title: Text(c['display_name'] as String)),
+      body: SafeArea(
+        child: ListView(
+          // A different key for every stage resets scroll and avoids reusing AsyncSection state
+          // (an address-list fetch must not be confused with a beneficiary-list fetch).
+          key: ValueKey('guided-booking-step-$_step'),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+          children: [
+            Text('Step ${_step + 1} of ${steps.length}', style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(
+              key: const Key('booking-progress'),
+              value: (_step + 1) / steps.length,
+              minHeight: 6,
+              semanticsLabel: 'Booking step ${_step + 1} of ${steps.length}',
+            ),
+            const SizedBox(height: 20),
+            Semantics(header: true, child: DefaultTextStyle(
+              style: Theme.of(context).textTheme.headlineSmall!,
+              child: steps[_step].title,
+            )),
+            const SizedBox(height: 14),
+            if (_step == 1 && _beneficiaryId != null)
+              const InfoBanner('The person receiving the service must approve by SMS before a provider is contacted.'),
+            steps[_step].content,
+            if (_step > 0) ...[
+              const SizedBox(height: 20),
+              OutlinedButton.icon(
+                key: const Key('booking-back'),
+                onPressed: _editPreviousStep,
+                icon: const Icon(Icons.arrow_back),
+                label: const Text('Back to previous step'),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -281,8 +330,8 @@ class _FindingProviderScreenState extends State<FindingProviderScreen> {
       'awaiting_beneficiary' => 'Waiting for your family member to confirm by SMS. We will not contact any provider until they agree.',
       'requested' || 'offering' => 'Looking for an approved provider. This is not confirmed yet.',
       'accepted' => 'A provider accepted your booking.',
-      'unfulfilled' => 'No approved provider is available for this time. You can choose another time or cancel.',
-      'expired' => 'Nobody accepted in time. You can choose another time.',
+      'unfulfilled' => 'No approved provider is available for this time. Start a new request for another time if needed.',
+      'expired' => 'Nobody accepted in time. Start a new request for another time.',
       'cancelled' => 'This request was cancelled.',
       _ => 'Checking…',
     };
@@ -292,8 +341,15 @@ class _FindingProviderScreenState extends State<FindingProviderScreen> {
         if (status != null) StatusChip(status),
         const SizedBox(height: 12),
         Text(message, key: const Key('finding-message'), style: Theme.of(context).textTheme.titleMedium),
-        if (const {'requested', 'offering', 'awaiting_beneficiary'}.contains(status)) const Padding(
-            padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator())),
+        if (const {'requested', 'offering', 'awaiting_beneficiary'}.contains(status) && _error == null)
+          const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator())),
+        if (_error != null)
+          OutlinedButton.icon(
+            key: const Key('refresh-request'),
+            onPressed: _poll,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Refresh request status'),
+          ),
         ErrorBanner(_error),
         if (r?['booking_id'] != null)
           FilledButton(
@@ -302,13 +358,21 @@ class _FindingProviderScreenState extends State<FindingProviderScreen> {
                 builder: (_) => BookingScreen(api: widget.api, bookingId: r!['booking_id'] as String))),
             child: const Text('See booking'),
           ),
-        if (const {'requested', 'offering', 'awaiting_beneficiary', 'unfulfilled'}.contains(status))
-          OutlinedButton(
+        if (const {'unfulfilled', 'expired', 'cancelled'}.contains(status))
+          OutlinedButton.icon(
+            key: const Key('new-request'),
+            onPressed: () => Navigator.of(context).maybePop(),
+            icon: const Icon(Icons.restart_alt_outlined),
+            label: const Text('Start a new request'),
+          ),
+        if (const {'requested', 'offering', 'awaiting_beneficiary'}.contains(status))
+          ActionButton(
+            label: 'Cancel request',
             onPressed: () async {
-              await widget.api.post('/v1/requests/${widget.requestId}/cancel', {'reason': 'Cancelled by customer'});
-              _poll();
+              await widget.api.post('/v1/requests/${widget.requestId}/cancel',
+                  {'reason': 'Cancelled by customer'});
+              await _poll();
             },
-            child: const Text('Cancel request'),
           ),
       ]),
     );

@@ -82,3 +82,16 @@ dl.kv dd { margin: 0; }
   main { padding: 16px; }
 }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* Operational triage: large values and explicit labels; color is never the only signal. */
+.ops-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px; margin-bottom: 16px; }
+.ops-header h1 { margin-bottom: 4px; }
+.ops-header p { margin: 0; max-width: 65ch; }
+.ops-subheading { font-size: 17px; margin: 0 0 12px; }
+.triage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 12px; margin-bottom: 18px; }
+.triage-card { display: flex; flex-direction: column; gap: 6px; background: var(--surface); border: 1px solid var(--border); border-inline-start: 4px solid var(--accent); border-radius: 12px; padding: 16px; }
+.triage-urgent { border-inline-start-color: var(--danger); }
+.triage-card span { font-weight: 650; }
+.triage-card strong { font-size: 30px; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.triage-card small { color: var(--muted); }
+@media (max-width: 480px) { .ops-header .btn { width: 100%; } }

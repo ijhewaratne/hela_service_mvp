@@ -70,7 +70,38 @@ class FakeBackend {
   }
 }
 
+class StubLanguagePref extends LanguagePref {
+  @override
+  Future<String?> read() async => 'en';
+  @override
+  Future<void> write(String lang) async {}
+}
+
 void main() {
+  testWidgets('saved customer session survives a startup outage and recovers on retry', (tester) async {
+    var online = false;
+    final backend = FakeBackend();
+    final store = MemoryTokenStore()..token = 'R1';
+    final api = HelaApi(store: store, baseUrl: 'http://api', client: MockClient((req) async {
+      if (req.url.path == '/v1/auth/refresh') {
+        if (!online) return http.Response('', 503);
+        return http.Response(jsonEncode({'access_token': 'A2', 'refresh_token': 'R2'}), 200);
+      }
+      return backend.handle(req);
+    }));
+    await tester.pumpWidget(CustomerApp(api: api, languagePref: StubLanguagePref(), showMaps: false));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('retry-session')), findsOneWidget);
+    expect(find.byKey(const Key('phone')), findsNothing);
+    expect(store.token, 'R1');
+
+    online = true;
+    await tester.tap(find.byKey(const Key('retry-session')));
+    await tester.pumpAndSettle();
+    expect(find.text('Everyday help for your household'), findsOneWidget);
+    expect(store.token, 'R2');
+  });
+
   testWidgets('language -> sign in -> book cleaning -> honest searching state -> booking with PIN', (tester) async {
     tester.view.physicalSize = const Size(1080, 2400);
     tester.view.devicePixelRatio = 2.5;
@@ -144,6 +175,79 @@ void main() {
     expect(find.byKey(const Key('pin')), findsOneWidget);
     expect(find.text('4821'), findsOneWidget);
     expect(find.textContaining('Provider 001'), findsOneWidget);
+  });
+
+
+  testWidgets('service discovery filters only server-returned categories and never invents a price', (tester) async {
+    tester.view.physicalSize = const Size(1080, 1920); // 360dp phone
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient(FakeBackend().handle));
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: ServicesHome(api: api, showMaps: false))));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('service-search')), findsOneWidget);
+    expect(find.textContaining('LKR 2,400'), findsNothing); // quote only after user selects tasks/time
+    await tester.enterText(find.byKey(const Key('service-search')), 'unknown category');
+    await tester.pumpAndSettle();
+    expect(find.textContaining('No services match'), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('service-search')), 'dusting');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('cat-household_cleaning')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('guided booking revisits an earlier step without losing selected address', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    final backend = FakeBackend();
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient(backend.handle));
+    final cat = (jsonDecode((await backend.handle(http.Request('GET', Uri.parse('http://api/v1/categories')))).body) as List).first
+        as Map<String, dynamic>;
+    await tester.pumpWidget(MaterialApp(home: BookingFlow(api: api, category: cat, showMaps: false)));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Step 1 of 5'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('addr-Home')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('next-address')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Step 2 of 5'), findsOneWidget);
+    expect(find.text('Who is the service for?'), findsOneWidget);
+    expect(find.textContaining('12 Synthetic Lane'), findsNothing); // no stale address AsyncSection
+    await tester.tap(find.byKey(const Key('booking-back')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Step 1 of 5'), findsOneWidget);
+    expect(tester.widget<FilledButton>(find.byKey(const Key('next-address'))).onPressed, isNotNull);
+  });
+
+  testWidgets('customer home works at 200 percent text on narrow Android viewport', (tester) async {
+    tester.view.physicalSize = const Size(1080, 1920);
+    tester.view.devicePixelRatio = 3;
+    tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+    addTearDown(tester.view.reset);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient(FakeBackend().handle));
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: ServicesHome(api: api, showMaps: false))));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.scrollUntilVisible(find.byKey(const Key('cat-household_cleaning')), 150,
+        scrollable: find.byType(Scrollable).first);
+    await tester.ensureVisible(find.byKey(const Key('cat-household_cleaning')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('cat-household_cleaning')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a request with no provider offers a new request rather than an invalid cancellation', (tester) async {
+    final backend = FakeBackend()..requestStatus = 'unfulfilled';
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient(backend.handle));
+    await tester.pumpWidget(MaterialApp(home: FindingProviderScreen(
+      api: api, requestId: 'r1', pollEvery: const Duration(hours: 1))));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('No approved provider is available'), findsOneWidget);
+    expect(find.byKey(const Key('new-request')), findsOneWidget);
+    expect(find.text('Cancel request'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
   testWidgets('booking screen scrolls on a small phone with large text: cancelling stays reachable', (tester) async {

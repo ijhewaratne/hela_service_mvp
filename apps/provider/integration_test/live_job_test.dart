@@ -97,13 +97,16 @@ void main() {
       await pumpUntil(tester, find.byKey(const Key('lang-en')));
       await tapAndWait(tester, find.byKey(const Key('lang-en')), find.byKey(const Key('phone')));
       await tester.enterText(find.byKey(const Key('phone')), providerPhone);
-      await tapAndWait(tester, find.byKey(const Key('send-code')), find.byKey(const Key('dev-fill')));
-      await tester.tap(find.byKey(const Key('dev-fill')));
+      await tapAndWait(tester, find.byKey(const Key('send-code')), find.textContaining('a code has been sent'));
+      // Read the code from the sandbox inbox; the SMS row can land a moment after the send returns.
       final codeField = find.byKey(const Key('code'));
-      final end = DateTime.now().add(const Duration(seconds: 10));
-      while (tester.widget<TextField>(codeField).controller!.text.length != 6 && DateTime.now().isBefore(end)) {
-        await tester.pump(const Duration(milliseconds: 200));
+      for (var attempt = 0; attempt < 5 && tester.widget<TextField>(codeField).controller!.text.length != 6; attempt++) {
+        await tester.tap(find.byKey(const Key('dev-fill')));
+        for (var i = 0; i < 10 && tester.widget<TextField>(codeField).controller!.text.length != 6; i++) {
+          await tester.pump(const Duration(milliseconds: 200));
+        }
       }
+      expect(tester.widget<TextField>(codeField).controller!.text, hasLength(6), reason: 'no code in the sandbox inbox');
       await tapAndWait(tester, find.byKey(const Key('verify')), find.text('Job offers'));
       await acceptNotices(tester, api);
 
