@@ -330,16 +330,7 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
             enabled: _challenge == null,
           ),
           const SizedBox(height: 12),
-          if (_challenge == null)
-            FilledButton(
-              key: const Key('send-code'),
-              onPressed: _busy || (widget.creatingAccount && !_acknowledged) ? null : () => _do(() async {
-                final id = await widget.api.requestOtp(_phone.text.trim());
-                if (mounted) setState(() => _challenge = id);
-              }),
-              child: Text(s.t('auth.send_code')),
-            )
-          else ...[
+          if (_challenge != null) ...[
             Text(s.t('auth.code_sent')),
             TextField(
               key: const Key('code'),
@@ -349,14 +340,6 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               autofillHints: const [AutofillHints.oneTimeCode],
               decoration: InputDecoration(labelText: s.t('auth.code')),
-            ),
-            FilledButton(
-              key: const Key('verify'),
-              onPressed: _busy ? null : () => _do(() async {
-                await widget.api.verifyOtp(_phone.text.trim(), _challenge!, _code.text);
-                widget.onSignedIn();
-              }),
-              child: Text(widget.creatingAccount ? 'Verify and continue' : s.t('auth.verify')),
             ),
             TextButton(
               key: const Key('change-phone'),
@@ -382,6 +365,28 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
               'There is no password to reset. A lost phone number needs an approved account-recovery process.'),
           ErrorBanner(_error),
         ]),
+      ),
+      // A primary action stays reachable even when the phone keyboard is open or
+      // large text pushes the form below the fold. The form itself remains scrollable.
+      bottomNavigationBar: SafeArea(
+        minimum: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+        child: _challenge == null
+            ? FilledButton(
+                key: const Key('send-code'),
+                onPressed: _busy || (widget.creatingAccount && !_acknowledged) ? null : () => _do(() async {
+                  final id = await widget.api.requestOtp(_phone.text.trim());
+                  if (mounted) setState(() => _challenge = id);
+                }),
+                child: Text(s.t('auth.send_code')),
+              )
+            : FilledButton(
+                key: const Key('verify'),
+                onPressed: _busy ? null : () => _do(() async {
+                  await widget.api.verifyOtp(_phone.text.trim(), _challenge!, _code.text);
+                  widget.onSignedIn();
+                }),
+                child: Text(widget.creatingAccount ? 'Verify and continue' : s.t('auth.verify')),
+              ),
       ),
     );
   }
