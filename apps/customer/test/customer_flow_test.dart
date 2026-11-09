@@ -238,6 +238,18 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('a request with no provider offers a new request rather than an invalid cancellation', (tester) async {
+    final backend = FakeBackend()..requestStatus = 'unfulfilled';
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient(backend.handle));
+    await tester.pumpWidget(MaterialApp(home: FindingProviderScreen(
+      api: api, requestId: 'r1', pollEvery: const Duration(hours: 1))));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('No approved provider is available'), findsOneWidget);
+    expect(find.byKey(const Key('new-request')), findsOneWidget);
+    expect(find.text('Cancel request'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
   testWidgets('booking screen scrolls on a small phone with large text: cancelling stays reachable', (tester) async {
     tester.view.physicalSize = const Size(1080, 1920);   // 360 x 640 dp
     tester.view.devicePixelRatio = 3;
