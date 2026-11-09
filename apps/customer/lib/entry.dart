@@ -189,7 +189,9 @@ class HelaAdminInfo extends StatelessWidget {
   Uri? get _approvedPortal {
     final uri = Uri.tryParse(portalUrl);
     if (uri == null || uri.scheme != 'https' || uri.host.isEmpty ||
-        uri.userInfo.isNotEmpty || uri.hasFragment) return null;
+        uri.userInfo.isNotEmpty || uri.hasFragment) {
+      return null;
+    }
     return uri;
   }
 
