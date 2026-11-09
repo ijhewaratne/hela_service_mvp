@@ -253,11 +253,12 @@ class LanguageScreen extends StatelessWidget {
 /// it creates a customer identity automatically when a previously unknown phone verifies.
 class PhoneSignInScreen extends StatefulWidget {
   const PhoneSignInScreen({super.key, required this.api, required this.onSignedIn,
-    required this.title, this.creatingAccount = false});
+    required this.title, this.creatingAccount = false, this.onBack});
   final HelaApi api;
   final VoidCallback onSignedIn;
   final String title;
   final bool creatingAccount;
+  final VoidCallback? onBack;
 
   @override
   State<PhoneSignInScreen> createState() => _PhoneSignInScreenState();
@@ -296,7 +297,15 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
   Widget build(BuildContext context) {
     final s = Strings.of(context);
     return Scaffold(
-      appBar: AppBar(title: Text(widget.creatingAccount ? 'Create a Hela account' : widget.title)),
+      appBar: AppBar(
+        title: Text(widget.creatingAccount ? 'Create a Hela account' : widget.title),
+        leading: widget.onBack == null ? null : IconButton(
+          key: const Key('otp-back'),
+          tooltip: 'Back to sign-in options',
+          icon: const Icon(Icons.arrow_back),
+          onPressed: widget.onBack,
+        ),
+      ),
       body: SafeArea(
         child: ListView(padding: const EdgeInsets.all(24), children: [
           const AppNotices(),
