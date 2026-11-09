@@ -307,12 +307,16 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
         ),
       ),
       body: SafeArea(
-        child: ListView(padding: const EdgeInsets.all(24), children: [
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           const AppNotices(),
-          InfoBanner(widget.creatingAccount
-              ? 'Create or access your Hela account by verifying a mobile number with a six-digit SMS code.'
-              : 'Sign in without a password. Verifying a new number automatically creates a customer account.'),
-          if (widget.creatingAccount)
+          if (_challenge == null)
+            InfoBanner(widget.creatingAccount
+                ? 'Create or access your Hela account by verifying a mobile number with a six-digit SMS code.'
+                : 'Sign in without a password. Verifying a new number automatically creates a customer account.'),
+          if (widget.creatingAccount && _challenge == null)
             CheckboxListTile(
               key: const Key('registration-ack'),
               value: _acknowledged,
@@ -364,7 +368,9 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
           const Text('Can’t receive SMS? Check your number and mobile coverage. '
               'There is no password to reset. A lost phone number needs an approved account-recovery process.'),
           ErrorBanner(_error),
-        ]),
+            ]),
+          ),
+        ),
       ),
       // A primary action stays reachable even when the phone keyboard is open or
       // large text pushes the form below the fold. The form itself remains scrollable.
