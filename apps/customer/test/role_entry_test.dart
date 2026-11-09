@@ -160,7 +160,9 @@ void main() {
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('code')), '123456');
     await tester.tap(find.byKey(const Key('verify')));
-    await tester.pumpAndSettle();
+    // A required notice is shown over the loading indicator; it intentionally cannot settle.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Synthetic Privacy Notice'), findsOneWidget);
     expect(find.byKey(const Key('decline-notice')), findsOneWidget);
     await tester.tap(find.byKey(const Key('decline-notice')));
