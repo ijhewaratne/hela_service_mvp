@@ -73,7 +73,7 @@ export function Login() {
         <div className="row">
           <button type="button" className="btn btn-ghost"
             aria-expanded={showRecovery}
-            aria-controls="admin-account-recovery"
+            aria-controls={showRecovery ? 'admin-account-recovery' : undefined}
             onClick={() => setShowRecovery((visible) => !visible)}>
             Forgot password or lost authenticator?
           </button>
