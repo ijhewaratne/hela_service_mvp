@@ -90,6 +90,31 @@ class StubLanguagePref extends LanguagePref {
 }
 
 void main() {
+  testWidgets('temporary offer-load failure is not misreported as no available work', (tester) async {
+    var down = true;
+    final backend = FakeBackend();
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient((req) async {
+      if (req.method == 'GET' && req.url.path == '/v1/offers/me' && down) {
+        return backend._err('TEMPORARY_UNAVAILABLE', 503);
+      }
+      return backend.handle(req);
+    }));
+    await tester.pumpWidget(ProviderApp(api: api, showMaps: false, offerPoll: const Duration(hours: 1)));
+    await tester.pumpAndSettle();
+    await signIn(tester);
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.byKey(const Key('retry-offers')), findsOneWidget);
+    expect(find.textContaining('No offers are available'), findsNothing);
+    expect(find.textContaining('TEMPORARY_UNAVAILABLE'), findsOneWidget);
+
+    down = false;
+    await tester.tap(find.byKey(const Key('retry-offers')));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byKey(const Key('offer-o1')), findsOneWidget);
+    expect(find.textContaining('Synthetic Lane'), findsNothing);
+  });
+
   testWidgets('profile lookup outage does not show provider application', (tester) async {
     var down = true;
     final backend = FakeBackend();
