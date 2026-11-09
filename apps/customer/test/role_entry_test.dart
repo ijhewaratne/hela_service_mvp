@@ -134,8 +134,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('setup-display-name')), findsOneWidget);
     await tester.enterText(find.byKey(const Key('setup-display-name')), 'Synthetic Worker');
+    await tester.pump();
+    // Verify the actual action becomes enabled only after the name state updates.
+    expect(tester.widget<FilledButton>(find.byKey(const Key('setup-save'))).onPressed, isNotNull);
     await tester.tap(find.byKey(const Key('setup-save')));
     await tester.pumpAndSettle();
+    expect(backend.paths, contains('PATCH /v1/me'));
     expect(backend.savedProfile?['display_name'], 'Synthetic Worker');
     expect(find.text('Work with Hela'), findsOneWidget);
     expect(backend.paths, contains('GET /v1/provider/me'));
