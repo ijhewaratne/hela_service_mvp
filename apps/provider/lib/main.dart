@@ -225,6 +225,8 @@ class OffersScreen extends StatefulWidget {
 class _OffersScreenState extends State<OffersScreen> {
   List<Map<String, dynamic>> _offers = [];
   Object? _error;
+  bool _hasLoaded = false;
+  bool _fetching = false;
   Timer? _poll;
   Timer? _tick;
   DateTime _now = DateTime.now();
@@ -247,16 +249,21 @@ class _OffersScreenState extends State<OffersScreen> {
   }
 
   Future<void> _load() async {
+    if (_fetching) return; // poll requests must never overlap
+    _fetching = true;
     try {
       final list = (await widget.api.get('/v1/offers/me') as List).cast<Map<String, dynamic>>();
       if (mounted) {
         setState(() {
           _offers = list;
           _error = null;
+          _hasLoaded = true;
         });
       }
     } catch (e) {
       if (mounted) setState(() => _error = e);
+    } finally {
+      _fetching = false;
     }
   }
 
@@ -268,8 +275,26 @@ class _OffersScreenState extends State<OffersScreen> {
         IconButton(tooltip: 'Refresh', onPressed: _load, icon: const Icon(Icons.refresh)),
       ]),
       const AppNotices(),
+      const SizedBox(height: 12),
+      const InfoBanner('Offers show only the approximate area; the exact household address is available after acceptance.'),
+      if (!_hasLoaded && _error == null)
+        const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())),
       ErrorBanner(_error),
-      if (_offers.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Text('No offers right now.')),
+      if (_error != null) ...[
+        OutlinedButton.icon(
+          key: const Key('retry-offers'),
+          onPressed: _load,
+          icon: const Icon(Icons.refresh),
+          label: const Text('Retry loading offers'),
+        ),
+        if (_hasLoaded)
+          const InfoBanner('Showing previously loaded offers. Refresh failed; availability may have changed.'),
+      ],
+      if (_hasLoaded && _offers.isEmpty)
+        const Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('No offers are available right now. Keep your approved categories and availability up to date.'),
+        ),
       for (final o in _offers)
         Builder(builder: (context) {
           final left = DateTime.parse(o['expires_at'] as String).difference(_now.toUtc());
