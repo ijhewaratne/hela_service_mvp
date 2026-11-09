@@ -249,12 +249,15 @@ class LanguageScreen extends StatelessWidget {
   }
 }
 
-/// C02/P01 phone OTP sign-in. The same response is shown whether or not an account exists.
+/// Customer/provider verification. The backend issues OTPs for both existing and new numbers;
+/// it creates a customer identity automatically when a previously unknown phone verifies.
 class PhoneSignInScreen extends StatefulWidget {
-  const PhoneSignInScreen({super.key, required this.api, required this.onSignedIn, required this.title});
+  const PhoneSignInScreen({super.key, required this.api, required this.onSignedIn,
+    required this.title, this.creatingAccount = false});
   final HelaApi api;
   final VoidCallback onSignedIn;
   final String title;
+  final bool creatingAccount;
 
   @override
   State<PhoneSignInScreen> createState() => _PhoneSignInScreenState();
@@ -266,6 +269,14 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
   String? _challenge;
   Object? _error;
   bool _busy = false;
+  bool _acknowledged = false;
+
+  @override
+  void dispose() {
+    _phone.dispose();
+    _code.dispose();
+    super.dispose();
+  }
 
   Future<void> _do(Future<void> Function() f) async {
     setState(() {
@@ -275,7 +286,7 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
     try {
       await f();
     } catch (e) {
-      setState(() => _error = e);
+      if (mounted) setState(() => _error = e);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -285,10 +296,22 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
   Widget build(BuildContext context) {
     final s = Strings.of(context);
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+      appBar: AppBar(title: Text(widget.creatingAccount ? 'Create a Hela account' : widget.title)),
       body: SafeArea(
         child: ListView(padding: const EdgeInsets.all(24), children: [
           const AppNotices(),
+          InfoBanner(widget.creatingAccount
+              ? 'Create or access your Hela account by verifying a mobile number with a six-digit SMS code.'
+              : 'Sign in without a password. Verifying a new number automatically creates a customer account.'),
+          if (widget.creatingAccount)
+            CheckboxListTile(
+              key: const Key('registration-ack'),
+              value: _acknowledged,
+              onChanged: (checked) => setState(() => _acknowledged = checked ?? false),
+              title: const Text('I understand this mobile number will be used to create or access my account.'),
+              subtitle: const Text('You must also review required privacy and service notices before using Hela.'),
+            ),
+          const SizedBox(height: 12),
           TextField(
             key: const Key('phone'),
             controller: _phone,
@@ -301,9 +324,9 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
           if (_challenge == null)
             FilledButton(
               key: const Key('send-code'),
-              onPressed: _busy ? null : () => _do(() async {
+              onPressed: _busy || (widget.creatingAccount && !_acknowledged) ? null : () => _do(() async {
                 final id = await widget.api.requestOtp(_phone.text.trim());
-                setState(() => _challenge = id);
+                if (mounted) setState(() => _challenge = id);
               }),
               child: Text(s.t('auth.send_code')),
             )
@@ -324,18 +347,30 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
                 await widget.api.verifyOtp(_phone.text.trim(), _challenge!, _code.text);
                 widget.onSignedIn();
               }),
-              child: Text(s.t('auth.verify')),
+              child: Text(widget.creatingAccount ? 'Verify and continue' : s.t('auth.verify')),
+            ),
+            TextButton(
+              key: const Key('change-phone'),
+              onPressed: _busy ? null : () => setState(() {
+                _challenge = null;
+                _code.clear();
+                _error = null;
+              }),
+              child: const Text('Change number or request a new code'),
             ),
             if (const String.fromEnvironment('HELA_DEV_INBOX_TOKEN').isNotEmpty)
               TextButton(
                 key: const Key('dev-fill'),
                 onPressed: () async {
                   final code = await widget.api.devLatestCode(_phone.text.trim());
-                  if (code != null) setState(() => _code.text = code);
+                  if (mounted && code != null) setState(() => _code.text = code);
                 },
                 child: Text(s.t('auth.dev_fill')),
               ),
           ],
+          const SizedBox(height: 12),
+          const Text('Can’t receive SMS? Check your number and mobile coverage. '
+              'There is no password to reset. A lost phone number needs an approved account-recovery process.'),
           ErrorBanner(_error),
         ]),
       ),
