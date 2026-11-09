@@ -17,6 +17,7 @@ class _Language extends LanguagePref {
 class _TestBackend {
   final paths = <String>[];
   Map<String, dynamic>? savedProfile;
+  bool requiredNotice = false;
 
   http.Response _json(Object content, [int status = 200]) => http.Response(
       jsonEncode(content), status, headers: {'content-type': 'application/json'});
@@ -33,7 +34,15 @@ class _TestBackend {
         savedProfile = jsonDecode(request.body) as Map<String, dynamic>;
         return _json({'display_name': savedProfile?['display_name']});
       case 'GET /v1/notices/current':
-        return _json([]);
+        return _json(requiredNotice ? [{
+          'id': 'n1',
+          'title': 'Synthetic Privacy Notice',
+          'body': 'Synthetic test notice only.',
+          'version': 1,
+          'approval_status': 'UNAPPROVED',
+        }] : []);
+      case 'POST /v1/notices/n1/accept':
+        return _json({'accepted': true});
       case 'GET /v1/provider/me':
         return _json({'error': {'code': 'PROVIDER_NOT_FOUND', 'message_key': 'provider.not_found',
           'message': 'Provider profile not found', 'correlation_id': 'test',
@@ -130,6 +139,33 @@ void main() {
     expect(backend.paths, contains('GET /v1/provider/me'));
     expect(find.textContaining('approved to receive jobs'), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+
+  testWidgets('declining required notices blocks the service and does not acknowledge terms', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    final backend = _TestBackend()..requiredNotice = true;
+    await tester.pumpWidget(_app(backend));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('role-customer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('entry-sign-in')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('phone')), '+94770000001');
+    await tester.tap(find.byKey(const Key('send-code')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('code')), '123456');
+    await tester.tap(find.byKey(const Key('verify')));
+    await tester.pumpAndSettle();
+    expect(find.text('Synthetic Privacy Notice'), findsOneWidget);
+    expect(find.byKey(const Key('decline-notice')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('decline-notice')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('role-customer')), findsOneWidget);
+    expect(find.byKey(const Key('switch-role')), findsNothing);
+    expect(backend.paths, isNot(contains('POST /v1/notices/n1/accept')));
   });
 
   testWidgets('sign in uses passwordless OTP and allows account switching', (tester) async {
