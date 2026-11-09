@@ -177,6 +177,65 @@ void main() {
     expect(find.textContaining('Provider 001'), findsOneWidget);
   });
 
+
+  testWidgets('service discovery filters only server-returned categories and never invents a price', (tester) async {
+    tester.view.physicalSize = const Size(1080, 1920); // 360dp phone
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient(FakeBackend().handle));
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: ServicesHome(api: api, showMaps: false))));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('service-search')), findsOneWidget);
+    expect(find.textContaining('LKR 2,400'), findsNothing); // quote only after user selects tasks/time
+    await tester.enterText(find.byKey(const Key('service-search')), 'unknown category');
+    await tester.pumpAndSettle();
+    expect(find.textContaining('No services match'), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('service-search')), 'dusting');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('cat-household_cleaning')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('guided booking revisits an earlier step without losing selected address', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    final backend = FakeBackend();
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient(backend.handle));
+    final cat = (jsonDecode((await backend.handle(http.Request('GET', Uri.parse('http://api/v1/categories')))).body) as List).first
+        as Map<String, dynamic>;
+    await tester.pumpWidget(MaterialApp(home: BookingFlow(api: api, category: cat, showMaps: false)));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Step 1 of 5'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('addr-Home')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('next-address')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Step 2 of 5'), findsOneWidget);
+    expect(find.text('Who is the service for?'), findsOneWidget);
+    expect(find.textContaining('12 Synthetic Lane'), findsNothing); // no stale address AsyncSection
+    await tester.tap(find.byKey(const Key('booking-back')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Step 1 of 5'), findsOneWidget);
+    expect(tester.widget<FilledButton>(find.byKey(const Key('next-address'))).onPressed, isNotNull);
+  });
+
+  testWidgets('customer home works at 200 percent text on narrow Android viewport', (tester) async {
+    tester.view.physicalSize = const Size(1080, 1920);
+    tester.view.devicePixelRatio = 3;
+    tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+    addTearDown(tester.view.reset);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient(FakeBackend().handle));
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: ServicesHome(api: api, showMaps: false))));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.scrollUntilVisible(find.byKey(const Key('cat-household_cleaning')), 150,
+        scrollable: find.byType(Scrollable).first);
+    expect(find.byKey(const Key('cat-household_cleaning')).hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('booking screen scrolls on a small phone with large text: cancelling stays reachable', (tester) async {
     tester.view.physicalSize = const Size(1080, 1920);   // 360 x 640 dp
     tester.view.devicePixelRatio = 3;
