@@ -330,8 +330,8 @@ class _FindingProviderScreenState extends State<FindingProviderScreen> {
       'awaiting_beneficiary' => 'Waiting for your family member to confirm by SMS. We will not contact any provider until they agree.',
       'requested' || 'offering' => 'Looking for an approved provider. This is not confirmed yet.',
       'accepted' => 'A provider accepted your booking.',
-      'unfulfilled' => 'No approved provider is available for this time. You can choose another time or cancel.',
-      'expired' => 'Nobody accepted in time. You can choose another time.',
+      'unfulfilled' => 'No approved provider is available for this time. Start a new request for another time if needed.',
+      'expired' => 'Nobody accepted in time. Start a new request for another time.',
       'cancelled' => 'This request was cancelled.',
       _ => 'Checking…',
     };
@@ -341,8 +341,15 @@ class _FindingProviderScreenState extends State<FindingProviderScreen> {
         if (status != null) StatusChip(status),
         const SizedBox(height: 12),
         Text(message, key: const Key('finding-message'), style: Theme.of(context).textTheme.titleMedium),
-        if (const {'requested', 'offering', 'awaiting_beneficiary'}.contains(status)) const Padding(
-            padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator())),
+        if (const {'requested', 'offering', 'awaiting_beneficiary'}.contains(status) && _error == null)
+          const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator())),
+        if (_error != null)
+          OutlinedButton.icon(
+            key: const Key('refresh-request'),
+            onPressed: _poll,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Refresh request status'),
+          ),
         ErrorBanner(_error),
         if (r?['booking_id'] != null)
           FilledButton(
@@ -351,13 +358,21 @@ class _FindingProviderScreenState extends State<FindingProviderScreen> {
                 builder: (_) => BookingScreen(api: widget.api, bookingId: r!['booking_id'] as String))),
             child: const Text('See booking'),
           ),
-        if (const {'requested', 'offering', 'awaiting_beneficiary', 'unfulfilled'}.contains(status))
-          OutlinedButton(
+        if (const {'unfulfilled', 'expired', 'cancelled'}.contains(status))
+          OutlinedButton.icon(
+            key: const Key('new-request'),
+            onPressed: () => Navigator.of(context).maybePop(),
+            icon: const Icon(Icons.restart_alt_outlined),
+            label: const Text('Start a new request'),
+          ),
+        if (const {'requested', 'offering', 'awaiting_beneficiary'}.contains(status))
+          ActionButton(
+            label: 'Cancel request',
             onPressed: () async {
-              await widget.api.post('/v1/requests/${widget.requestId}/cancel', {'reason': 'Cancelled by customer'});
-              _poll();
+              await widget.api.post('/v1/requests/${widget.requestId}/cancel',
+                  {'reason': 'Cancelled by customer'});
+              await _poll();
             },
-            child: const Text('Cancel request'),
           ),
       ]),
     );
