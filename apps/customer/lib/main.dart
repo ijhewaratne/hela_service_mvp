@@ -480,6 +480,7 @@ class _HelaAppState extends State<HelaApp> {
             key: ValueKey('${_selectedRole.name}-$_creatingAccount'),
             title: _selectedRole == HelaRole.provider ? 'Hela Provider' : 'Hela Service',
             creatingAccount: _creatingAccount,
+            onBack: () => setState(() => _stage = _HelaEntryStage.authentication),
             api: widget.api,
             onSignedIn: () { _afterOtp(); },
           ),
