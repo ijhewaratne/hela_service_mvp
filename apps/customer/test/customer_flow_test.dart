@@ -98,7 +98,7 @@ void main() {
     online = true;
     await tester.tap(find.byKey(const Key('retry-session')));
     await tester.pumpAndSettle();
-    expect(find.text('Book a service'), findsOneWidget);
+    expect(find.text('Everyday help for your household'), findsOneWidget);
     expect(store.token, 'R2');
   });
 
