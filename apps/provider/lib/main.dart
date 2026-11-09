@@ -20,7 +20,7 @@ class ProviderApp extends StatefulWidget {
   State<ProviderApp> createState() => _ProviderAppState();
 }
 
-enum _Stage { loading, language, signIn, home }
+enum _Stage { loading, language, signIn, recovery, home }
 
 class _ProviderAppState extends State<ProviderApp> {
   _Stage _stage = _Stage.loading;
@@ -34,12 +34,19 @@ class _ProviderAppState extends State<ProviderApp> {
     _start();
   }
 
+  _Stage _stageForSession(SessionRestoreStatus result) => switch (result) {
+        SessionRestoreStatus.authenticated => _Stage.home,
+        SessionRestoreStatus.needsSignIn => _Stage.signIn,
+        SessionRestoreStatus.temporarilyUnavailable => _Stage.recovery,
+      };
+
   Future<void> _start() async {
     final saved = await widget.languagePref?.read();
-    final resumed = await widget.api.resume();
+    final result = await widget.api.resumeStatus();
+    if (!mounted) return;
     setState(() {
       _language = saved ?? 'en';
-      _stage = saved == null ? _Stage.language : resumed ? _Stage.home : _Stage.signIn;
+      _stage = saved == null ? _Stage.language : _stageForSession(result);
     });
   }
 
@@ -69,7 +76,17 @@ class _ProviderAppState extends State<ProviderApp> {
               title: 'Hela Provider',
               onChosen: (l) async {
                 await _setLanguage(l);
-                setState(() => _stage = _Stage.signIn);
+                final result = await widget.api.resumeStatus();
+                if (mounted) setState(() => _stage = _stageForSession(result));
+              }),
+          _Stage.recovery => SessionRecoveryScreen(
+              onRetry: () {
+                setState(() => _stage = _Stage.loading);
+                _start();
+              },
+              onChooseAccount: () async {
+                await widget.api.forgetSession();   // ends it on the server too, now or once back online
+                if (mounted) setState(() => _stage = _Stage.signIn);
               }),
           _Stage.signIn => PhoneSignInScreen(
               title: 'Hela Provider',
@@ -113,15 +130,27 @@ class _ProviderHomeState extends State<ProviderHome> {
   Future<void> _load() async {
     try {
       final p = await widget.api.get('/v1/provider/me') as Map<String, dynamic>;
+      if (!mounted) return;
       setState(() {
         _profile = p;
+        _error = null;
         _checked = true;
       });
     } on ApiException catch (e) {
+      if (!mounted) return;
       setState(() {
         _checked = true;
         _profile = null;
         _error = e.code == 'PROVIDER_NOT_FOUND' ? null : e;
+      });
+    } catch (_) {
+      // Anything else (an unexpected response shape, a client bug) must not leave the spinner up forever, and
+      // must not look like "no profile" either. Raw error text is not shown: it can contain response content.
+      if (!mounted) return;
+      setState(() {
+        _checked = true;
+        _profile = null;
+        _error = ApiException(0, 'UNEXPECTED', 'error.unexpected', 'Something went wrong. Try again.', '-', true, const {});
       });
     }
   }
@@ -129,8 +158,38 @@ class _ProviderHomeState extends State<ProviderHome> {
   @override
   Widget build(BuildContext context) {
     if (!_checked) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (_profile == null && _error != null) {
+      // A failed lookup does not mean the user is a new provider. Never suggest reapplying during an outage.
+      return Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ErrorBanner(_error),
+                    FilledButton(
+                      key: const Key('retry-provider-profile'),
+                      onPressed: () {
+                        setState(() => _checked = false);
+                        _load();
+                      },
+                      child: const Text('Retry loading provider profile'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     if (_profile == null) {
-      return Scaffold(body: SafeArea(child: Column(children: [ErrorBanner(_error), Expanded(child: ApplyScreen(api: widget.api, onApplied: _load))])));
+      return Scaffold(body: SafeArea(child: ApplyScreen(api: widget.api, onApplied: _load)));
     }
     final pages = [
       OffersScreen(api: widget.api, pollEvery: widget.offerPoll),

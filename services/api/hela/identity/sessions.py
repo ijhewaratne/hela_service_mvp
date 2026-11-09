@@ -51,6 +51,18 @@ def revoke_session(con: Connection, session_id: str, reason: str) -> bool:
                        WHERE id = :sid AND revoked_at IS NULL''', sid=session_id, r=reason) > 0
 
 
+def revoke_by_refresh_token(con: Connection, refresh_token: str, subject_type: SubjectType,
+                            reason: str) -> tuple[str, str] | None:
+    """Ends the session a refresh token belongs to, whether the token is current or already rotated (RFC 7009
+    style: possession of the token is the credential). Returns (session_id, subject_id) if a live session ended."""
+    row = one(con, '''SELECT s.id, s.subject_id FROM refresh_tokens rt JOIN sessions s ON s.id = rt.session_id
+                      WHERE rt.token_hash = :h AND s.subject_type = :t FOR UPDATE OF s''',
+              h=sha256_hex(refresh_token), t=subject_type)
+    if row is None or not revoke_session(con, str(row['id']), reason):
+        return None
+    return str(row['id']), str(row['subject_id'])
+
+
 def revoke_all(con: Connection, subject_type: SubjectType, subject_id: str, reason: str) -> int:
     return run(con, '''UPDATE sessions SET revoked_at = now(), revoke_reason = :r
                        WHERE subject_type = :t AND subject_id = :s AND revoked_at IS NULL''',

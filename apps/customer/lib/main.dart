@@ -18,7 +18,7 @@ class CustomerApp extends StatefulWidget {
   State<CustomerApp> createState() => _CustomerAppState();
 }
 
-enum _Stage { loading, language, signIn, home }
+enum _Stage { loading, language, signIn, recovery, home }
 
 class _CustomerAppState extends State<CustomerApp> {
   _Stage _stage = _Stage.loading;
@@ -32,12 +32,19 @@ class _CustomerAppState extends State<CustomerApp> {
     _start();
   }
 
+  _Stage _stageForSession(SessionRestoreStatus result) => switch (result) {
+        SessionRestoreStatus.authenticated => _Stage.home,
+        SessionRestoreStatus.needsSignIn => _Stage.signIn,
+        SessionRestoreStatus.temporarilyUnavailable => _Stage.recovery,
+      };
+
   Future<void> _start() async {
     final saved = await widget.languagePref?.read();
-    final resumed = await widget.api.resume(); // stored refresh token -> new session, or sign in again
+    final result = await widget.api.resumeStatus();
+    if (!mounted) return;
     setState(() {
       _language = saved ?? 'en';
-      _stage = saved == null ? _Stage.language : resumed ? _Stage.home : _Stage.signIn;
+      _stage = saved == null ? _Stage.language : _stageForSession(result);
     });
   }
 
@@ -67,7 +74,17 @@ class _CustomerAppState extends State<CustomerApp> {
               title: 'Hela Service',
               onChosen: (l) async {
                 await _setLanguage(l);
-                setState(() => _stage = _Stage.signIn);
+                final result = await widget.api.resumeStatus();
+                if (mounted) setState(() => _stage = _stageForSession(result));
+              }),
+          _Stage.recovery => SessionRecoveryScreen(
+              onRetry: () {
+                setState(() => _stage = _Stage.loading);
+                _start();
+              },
+              onChooseAccount: () async {
+                await widget.api.forgetSession();   // ends it on the server too, now or once back online
+                if (mounted) setState(() => _stage = _Stage.signIn);
               }),
           _Stage.signIn => PhoneSignInScreen(
               title: 'Hela Service',

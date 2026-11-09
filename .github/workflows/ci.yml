@@ -157,6 +157,8 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The first commit has no parent; scanning the complete history avoids an invalid root^ range.
+          GITLEAKS_LOG_OPTS: --all
 
   sast:
     runs-on: ubuntu-latest
@@ -168,6 +170,8 @@ jobs:
       - name: Semgrep (rule packs only; no login, no metrics)
         run: |
           pip install semgrep==1.136.0
+          # This Semgrep release imports pkg_resources, removed from newer setuptools.
+          pip install 'setuptools<81'
           semgrep scan --metrics=off --error \
             --config p/python --config p/secrets --config p/dockerfile --config p/kubernetes --config p/typescript \
             --exclude node_modules --exclude dist --exclude build --exclude .venv \
