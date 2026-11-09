@@ -291,15 +291,18 @@ class _HelaProfileSetupState extends State<HelaProfileSetup> {
         ),
       ),
       const SizedBox(height: 12),
-      FilledButton(
-        key: const Key('setup-save'),
-        onPressed: _name.text.trim().length >= 2 && !_busy ? _save : null,
-        child: const Padding(padding: EdgeInsets.all(12), child: Text('Save and continue')),
-      ),
       const SizedBox(height: 8),
       TextButton(key: const Key('setup-skip'), onPressed: _busy ? null : widget.onComplete,
           child: const Text('Do this later')),
       ErrorBanner(_error),
     ])),
+    bottomNavigationBar: SafeArea(
+      minimum: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+      child: FilledButton(
+        key: const Key('setup-save'),
+        onPressed: _name.text.trim().length >= 2 && !_busy ? _save : null,
+        child: const Padding(padding: EdgeInsets.all(12), child: Text('Save and continue')),
+      ),
+    ),
   );
 }
