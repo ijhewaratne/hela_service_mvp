@@ -387,24 +387,41 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
   }
 }
 
-/// Notice acceptance (FR-ID-05): records version, language and processing context server-side.
-Future<void> ensureNoticesAccepted(BuildContext context, HelaApi api, String language, String processingContext) async {
-  final notices = (await api.get('/v1/notices/current?language=$language') as List).cast<Map<String, dynamic>>();
-  for (final n in notices) {
-    if (!context.mounted) return;
-    final ok = await showDialog<bool>(
+/// Required notices (FR-ID-05). Users may decline; no home/booking access is granted
+/// until each currently required notice has been explicitly accepted server-side.
+Future<bool> ensureNoticesAccepted(BuildContext context, HelaApi api,
+    String language, String processingContext) async {
+  final notices = (await api.get('/v1/notices/current?language=$language') as List)
+      .cast<Map<String, dynamic>>();
+  for (final notice in notices) {
+    if (!context.mounted) return false;
+    final accepted = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: Text(n['title'] as String),
-        content: SingleChildScrollView(child: Text('${n['body']}\n\n(version ${n['version']}, ${n['approval_status']})')),
+      builder: (dialogContext) => AlertDialog(
+        title: Text(notice['title'] as String),
+        content: SingleChildScrollView(
+          child: Text('${notice['body']}\n\n(version ${notice['version']}, ${notice['approval_status']})'),
+        ),
         actions: [
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(Strings.of(context).t('notice.accept'))),
+          TextButton(
+            key: const Key('decline-notice'),
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Decline'),
+          ),
+          FilledButton(
+            key: const Key('accept-notice'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(Strings.of(context).t('notice.accept')),
+          ),
         ],
       ),
     );
-    if (ok == true) await api.post('/v1/notices/${n['id']}/accept', {'processing_context': processingContext});
+    if (accepted != true) return false;
+    await api.post('/v1/notices/${notice['id']}/accept',
+        {'processing_context': processingContext});
   }
+  return true;
 }
 
 /// Incident report (FR-SAF-01, C12/P10). Reachable without payment or review; never an emergency service.
