@@ -405,8 +405,12 @@ class _HelaAppState extends State<HelaApp> {
       await _setLanguage(_language);
       final ctx = _navigator.currentContext;
       if (ctx == null || !ctx.mounted) throw StateError('Navigator not available');
-      await ensureNoticesAccepted(ctx, widget.api, _language,
+      final accepted = await ensureNoticesAccepted(ctx, widget.api, _language,
           _selectedRole == HelaRole.provider ? 'provider_signup' : 'customer_signup');
+      if (!accepted) {
+        await _useDifferentAccount();
+        return;
+      }
       if (!mounted) return;
       setState(() => _stage = _creatingAccount ? _HelaEntryStage.profileSetup : _roleHome());
     } catch (e) {
