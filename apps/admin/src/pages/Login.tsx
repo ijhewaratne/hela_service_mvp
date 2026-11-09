@@ -12,6 +12,7 @@ export function Login() {
   const [code, setCode] = useState('');
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const [showRecovery, setShowRecovery] = useState(false);
 
   async function submitPassword(e: FormEvent) {
     e.preventDefault();
@@ -69,6 +70,25 @@ export function Login() {
           </form>
         )}
         <ErrorBanner error={error} />
+        <div className="row">
+          <button type="button" className="btn btn-ghost"
+            aria-expanded={showRecovery}
+            aria-controls="admin-account-recovery"
+            onClick={() => setShowRecovery((visible) => !visible)}>
+            Forgot password or lost authenticator?
+          </button>
+        </div>
+        {showRecovery && (
+          <div id="admin-account-recovery" role="region" aria-label="Administrator account recovery">
+            <Notice>
+              Administrator accounts are issued by Hela Operations. Contact your designated
+              system administrator through your organization's verified support channel to
+              request a supervised password or authenticator reset. Self-service account
+              creation and recovery are not enabled. Never share passwords, recovery codes
+              or authenticator secrets.
+            </Notice>
+          </div>
+        )}
       </div>
     </main>
   );
