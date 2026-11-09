@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import axe from 'axe-core';
 import { ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -78,4 +78,17 @@ describe('console pages pass automated accessibility checks', () => {
   it('category policies', async () => {
     expect(await violations(<CategoryPolicies />, '/controls/household_cleaning', '/controls/:code')).toEqual([]);
   });
+  it('shows counts derived from the operations queue without suggesting synthetic requests are confirmed', async () => {
+    render(
+      <AuthProvider>
+        <MemoryRouter><main><Dashboard /></main></MemoryRouter>
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('alerts-count')).toHaveTextContent('0'));
+    expect(screen.getByTestId('booking-attention-count')).toHaveTextContent('0');
+    expect(screen.getByTestId('unfulfilled-count')).toHaveTextContent('0');
+    expect(screen.getByTestId('consent-count')).toHaveTextContent('0');
+    expect(screen.getByText('Never describe these requests as confirmed.')).toBeVisible();
+  });
+
 });
