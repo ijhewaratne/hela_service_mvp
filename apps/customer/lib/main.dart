@@ -338,10 +338,12 @@ class _HelaAppState extends State<HelaApp> {
   void initState() {
     super.initState();
     widget.api.onSignedOut = () {
-      if (mounted) setState(() {
-        _authenticated = false;
-        _stage = _HelaEntryStage.roles;
-      });
+      if (mounted) {
+        setState(() {
+          _authenticated = false;
+          _stage = _HelaEntryStage.roles;
+        });
+      }
     };
     _restore();
   }
@@ -408,10 +410,12 @@ class _HelaAppState extends State<HelaApp> {
       if (!mounted) return;
       setState(() => _stage = _creatingAccount ? _HelaEntryStage.profileSetup : _roleHome());
     } catch (e) {
-      if (mounted) setState(() {
-        _noticeError = e;
-        _stage = _HelaEntryStage.noticeError;
-      });
+      if (mounted) {
+        setState(() {
+          _noticeError = e;
+          _stage = _HelaEntryStage.noticeError;
+        });
+      }
     }
   }
 
