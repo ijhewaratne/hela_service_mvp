@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:hela_core/hela_core.dart';
+import 'package:hela_provider/main.dart' as provider_app;
 
 import 'account.dart';
 import 'booking_flow.dart';
 import 'bookings.dart';
+import 'entry.dart';
 
-void main() => runApp(CustomerApp(api: HelaApi(store: SecureTokenStore()), languagePref: LanguagePref()));
+void main() => runApp(HelaApp(api: HelaApi(store: SecureTokenStore()), languagePref: LanguagePref()));
 
 /// Hela Service customer app (C01–C13). Synthetic development build only.
 class CustomerApp extends StatefulWidget {
@@ -90,10 +92,21 @@ class _CustomerAppState extends State<CustomerApp> {
               title: 'Hela Service',
               api: widget.api,
               onSignedIn: () async {
-                setState(() => _stage = _Stage.home);
                 await _setLanguage(_language);
                 final ctx = _navigator.currentContext;
-                if (ctx != null && ctx.mounted) await ensureNoticesAccepted(ctx, widget.api, _language, 'customer_signup');
+                try {
+                  final accepted = ctx != null && ctx.mounted &&
+                      await ensureNoticesAccepted(ctx, widget.api, _language, 'customer_signup');
+                  if (!accepted) {
+                    await widget.api.forgetSession();
+                    return;
+                  }
+                  if (mounted) setState(() => _stage = _Stage.home);
+                } catch (_) {
+                  // Required notices unavailable: never enter the authenticated service.
+                  await widget.api.forgetSession();
+                  if (mounted) setState(() => _stage = _Stage.signIn);
+                }
               }),
           _Stage.home => HomeScreen(api: widget.api, showMaps: widget.showMaps),
         },
@@ -297,6 +310,241 @@ class _ServicesHomeState extends State<ServicesHome> {
           ),
         ),
       ],
+    );
+  }
+}
+
+
+/// Primary consumer entrypoint: the same verified user may use the customer and
+/// provider journeys. Role selection never changes identity, credentials or permissions.
+class HelaApp extends StatefulWidget {
+  const HelaApp({super.key, required this.api, this.languagePref, this.showMaps = true,
+    this.offerPoll = const Duration(seconds: 5),
+    this.adminPortalUrl = const String.fromEnvironment('HELA_ADMIN_PORTAL_URL')});
+  final HelaApi api;
+  final LanguagePref? languagePref;
+  final bool showMaps;
+  final Duration offerPoll;
+  final String adminPortalUrl;
+
+  @override
+  State<HelaApp> createState() => _HelaAppState();
+}
+
+enum _HelaEntryStage {
+  loading, language, roles, authentication, otp, profileSetup,
+  recipient, administrator, recovery, noticeError, customer, provider,
+}
+
+class _HelaAppState extends State<HelaApp> {
+  _HelaEntryStage _stage = _HelaEntryStage.loading;
+  HelaRole _selectedRole = HelaRole.customer;
+  String _language = 'en';
+  bool _authenticated = false;
+  bool _creatingAccount = false;
+  Object? _noticeError;
+  final _navigator = GlobalKey<NavigatorState>();
+
+  @override
+  void initState() {
+    super.initState();
+    widget.api.onSignedOut = () {
+      if (mounted) {
+        setState(() {
+          _authenticated = false;
+          _stage = _HelaEntryStage.roles;
+        });
+      }
+    };
+    _restore();
+  }
+
+  Future<void> _restore() async {
+    try {
+      final language = await widget.languagePref?.read();
+      final restored = await widget.api.resumeStatus();
+      if (!mounted) return;
+      setState(() {
+        _language = language ?? 'en';
+        _authenticated = restored == SessionRestoreStatus.authenticated;
+        _stage = language == null
+            ? _HelaEntryStage.language
+            : restored == SessionRestoreStatus.temporarilyUnavailable
+                ? _HelaEntryStage.recovery
+                : _HelaEntryStage.roles;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _stage = _HelaEntryStage.recovery);
+    }
+  }
+
+  Future<void> _setLanguage(String language) async {
+    await widget.languagePref?.write(language);
+    if (!mounted) return;
+    setState(() => _language = language);
+    if (widget.api.hasSession) {
+      try {
+        await widget.api.patch('/v1/me', {'preferred_language': language});
+      } catch (_) {
+        // Language is stored on the device; remote sync can be retried later.
+      }
+    }
+  }
+
+  _HelaEntryStage _roleHome() =>
+      _selectedRole == HelaRole.provider ? _HelaEntryStage.provider : _HelaEntryStage.customer;
+
+  void _chooseRole(HelaRole role) {
+    setState(() {
+      _selectedRole = role;
+      _stage = switch (role) {
+        HelaRole.recipient => _HelaEntryStage.recipient,
+        HelaRole.administrator => _HelaEntryStage.administrator,
+        _ => _authenticated ? _roleHome() : _HelaEntryStage.authentication,
+      };
+    });
+  }
+
+  Future<void> _afterOtp() async {
+    if (!mounted) return;
+    setState(() {
+      _authenticated = true;
+      _noticeError = null;
+      _stage = _HelaEntryStage.loading;
+    });
+    try {
+      await _setLanguage(_language);
+      final ctx = _navigator.currentContext;
+      if (ctx == null || !ctx.mounted) throw StateError('Navigator not available');
+      final accepted = await ensureNoticesAccepted(ctx, widget.api, _language,
+          _selectedRole == HelaRole.provider ? 'provider_signup' : 'customer_signup');
+      if (!accepted) {
+        await _useDifferentAccount();
+        return;
+      }
+      if (!mounted) return;
+      setState(() => _stage = _creatingAccount ? _HelaEntryStage.profileSetup : _roleHome());
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _noticeError = e;
+          _stage = _HelaEntryStage.noticeError;
+        });
+      }
+    }
+  }
+
+  Future<void> _useDifferentAccount() async {
+    await widget.api.forgetSession();
+    if (!mounted) return;
+    setState(() {
+      _authenticated = false;
+      _stage = _HelaEntryStage.roles;
+    });
+  }
+
+  Widget _roleScaffold(Widget home, String title) => Scaffold(
+    appBar: AppBar(
+      title: Text(title),
+      actions: [
+        TextButton(
+          key: const Key('switch-role'),
+          onPressed: () => setState(() => _stage = _HelaEntryStage.roles),
+          child: const Text('Switch role'),
+        ),
+      ],
+    ),
+    body: home,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return LanguageScope(
+      strings: Strings(_language),
+      setLanguage: (language) { _setLanguage(language); },
+      child: MaterialApp(
+        navigatorKey: _navigator,
+        title: 'Hela Service',
+        theme: ThemeData(colorSchemeSeed: const Color(0xFF0B6E4F), useMaterial3: true),
+        darkTheme: ThemeData(colorSchemeSeed: const Color(0xFF0B6E4F),
+            brightness: Brightness.dark, useMaterial3: true),
+        home: switch (_stage) {
+          _HelaEntryStage.loading =>
+            const Scaffold(body: Center(child: CircularProgressIndicator())),
+          _HelaEntryStage.language => LanguageScreen(
+            title: 'Hela Service',
+            onChosen: (language) async {
+              await _setLanguage(language);
+              if (mounted) setState(() => _stage = _HelaEntryStage.roles);
+            },
+          ),
+          _HelaEntryStage.roles => HelaRoleChooser(onSelect: _chooseRole),
+          _HelaEntryStage.authentication => HelaAuthChoice(
+            role: _selectedRole,
+            onSignIn: () => setState(() {
+              _creatingAccount = false;
+              _stage = _HelaEntryStage.otp;
+            }),
+            onCreateAccount: () => setState(() {
+              _creatingAccount = true;
+              _stage = _HelaEntryStage.otp;
+            }),
+            onBack: () => setState(() => _stage = _HelaEntryStage.roles),
+          ),
+          _HelaEntryStage.otp => PhoneSignInScreen(
+            key: ValueKey('${_selectedRole.name}-$_creatingAccount'),
+            title: _selectedRole == HelaRole.provider ? 'Hela Provider' : 'Hela Service',
+            creatingAccount: _creatingAccount,
+            onBack: () => setState(() => _stage = _HelaEntryStage.authentication),
+            api: widget.api,
+            onSignedIn: () { _afterOtp(); },
+          ),
+          _HelaEntryStage.profileSetup => HelaProfileSetup(
+            api: widget.api,
+            onComplete: () => setState(() => _stage = _roleHome()),
+          ),
+          _HelaEntryStage.recipient => HelaRecipientInfo(
+            onBack: () => setState(() => _stage = _HelaEntryStage.roles),
+            onBook: () => _chooseRole(HelaRole.customer),
+          ),
+          _HelaEntryStage.administrator => HelaAdminInfo(
+            portalUrl: widget.adminPortalUrl,
+            onBack: () => setState(() => _stage = _HelaEntryStage.roles),
+          ),
+          _HelaEntryStage.recovery => SessionRecoveryScreen(
+            onRetry: () {
+              setState(() => _stage = _HelaEntryStage.loading);
+              _restore();
+            },
+            onChooseAccount: () { _useDifferentAccount(); },
+          ),
+          _HelaEntryStage.noticeError => Scaffold(
+            appBar: AppBar(title: const Text('Account verification')),
+            body: SafeArea(child: ListView(padding: const EdgeInsets.all(24), children: [
+              const ScreenTitle('Before you continue'),
+              const Text('Required account notices could not be verified. '
+                  'Access to the service remains blocked until this completes.'),
+              ErrorBanner(_noticeError),
+              FilledButton(
+                key: const Key('retry-account-notices'),
+                onPressed: _afterOtp,
+                child: const Text('Retry'),
+              ),
+              TextButton(onPressed: () { _useDifferentAccount(); },
+                  child: const Text('Use another account')),
+            ])),
+          ),
+          _HelaEntryStage.customer => _roleScaffold(
+            HomeScreen(api: widget.api, showMaps: widget.showMaps),
+            'Hela · Customer',
+          ),
+          _HelaEntryStage.provider => _roleScaffold(
+            provider_app.ProviderHome(
+              api: widget.api, showMaps: widget.showMaps, offerPoll: widget.offerPoll),
+            'Hela · Provider',
+          ),
+        },
+      ),
     );
   }
 }

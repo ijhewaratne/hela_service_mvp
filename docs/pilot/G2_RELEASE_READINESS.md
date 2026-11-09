@@ -23,7 +23,10 @@ This is a tracking checklist, not an authorization to handle real user data. The
 - [ ] Service/customer geocoding and manual address fallback tested locally; no route-based ETA or live GPS in the pilot without a separate approved specification.
 - [ ] Human-reviewed English, Sinhala and Tamil consent, safety, policy, booking and support messages; font/overflow screen tests across locales. Existing si/ta fallback is **not** localization completion.
 - [ ] Physical Android phone, TalkBack, slow network, small screen, 200% text and app-install test. Independent security and accessibility audit; address high-severity findings.
-- [ ] Admin MFA recovery, privileged access review, operational change controls and incident tabletop test.
+- [ ] Admin MFA/password recovery with verified staff identity, dual control for privileged resets, audit trail, privileged access review, operational change controls and incident tabletop test.
+- [ ] Lost-phone/SIM customer and provider account recovery SOP with identity proof, rate limits, compromised-session revocation, fraud checks and independent audit.
+- [ ] Registration/consent timing review: the current backend creates a minimal customer identity at first successful OTP verification, before the required versioned notices are acknowledged. Approve the lawful basis or redesign deferred registration before real-user processing.
+- [ ] Unified role selector, OTP and profile setup verified on physical Android with TalkBack, local-language review and low-bandwidth conditions; admin portal HTTPS URL configured only in trusted builds.
 - [ ] Customer/provider communication and incident support that works during the actual pilot operating hours; validate service-level objectives after load tests.
 - [ ] Independently confirm that booking acceptance races return a single success and conflicts under repeated external-worker load.
 

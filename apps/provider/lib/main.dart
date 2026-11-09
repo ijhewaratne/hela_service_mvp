@@ -92,10 +92,21 @@ class _ProviderAppState extends State<ProviderApp> {
               title: 'Hela Provider',
               api: widget.api,
               onSignedIn: () async {
-                setState(() => _stage = _Stage.home);
                 await _setLanguage(_language);
                 final ctx = _navigator.currentContext;
-                if (ctx != null && ctx.mounted) await ensureNoticesAccepted(ctx, widget.api, _language, 'provider_signup');
+                try {
+                  final accepted = ctx != null && ctx.mounted &&
+                      await ensureNoticesAccepted(ctx, widget.api, _language, 'provider_signup');
+                  if (!accepted) {
+                    await widget.api.forgetSession();
+                    return;
+                  }
+                  if (mounted) setState(() => _stage = _Stage.home);
+                } catch (_) {
+                  // Required notices unavailable: never enter the authenticated service.
+                  await widget.api.forgetSession();
+                  if (mounted) setState(() => _stage = _Stage.signIn);
+                }
               }),
           _Stage.home => ProviderHome(api: widget.api, showMaps: widget.showMaps, offerPoll: widget.offerPoll),
         },

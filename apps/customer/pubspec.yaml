@@ -32,6 +32,9 @@ dependencies:
     sdk: flutter
   hela_core:
     path: ../hela_core
+  hela_provider:
+    path: ../provider
+  url_launcher: ^6.3.2
   latlong2: 0.10.1
 
   # The following adds the Cupertino Icons font to your application.

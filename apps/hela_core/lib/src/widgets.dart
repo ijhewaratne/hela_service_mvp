@@ -249,12 +249,16 @@ class LanguageScreen extends StatelessWidget {
   }
 }
 
-/// C02/P01 phone OTP sign-in. The same response is shown whether or not an account exists.
+/// Customer/provider verification. The backend issues OTPs for both existing and new numbers;
+/// it creates a customer identity automatically when a previously unknown phone verifies.
 class PhoneSignInScreen extends StatefulWidget {
-  const PhoneSignInScreen({super.key, required this.api, required this.onSignedIn, required this.title});
+  const PhoneSignInScreen({super.key, required this.api, required this.onSignedIn,
+    required this.title, this.creatingAccount = false, this.onBack});
   final HelaApi api;
   final VoidCallback onSignedIn;
   final String title;
+  final bool creatingAccount;
+  final VoidCallback? onBack;
 
   @override
   State<PhoneSignInScreen> createState() => _PhoneSignInScreenState();
@@ -266,6 +270,14 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
   String? _challenge;
   Object? _error;
   bool _busy = false;
+  bool _acknowledged = false;
+
+  @override
+  void dispose() {
+    _phone.dispose();
+    _code.dispose();
+    super.dispose();
+  }
 
   Future<void> _do(Future<void> Function() f) async {
     setState(() {
@@ -275,7 +287,7 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
     try {
       await f();
     } catch (e) {
-      setState(() => _error = e);
+      if (mounted) setState(() => _error = e);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -285,10 +297,34 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
   Widget build(BuildContext context) {
     final s = Strings.of(context);
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+      appBar: AppBar(
+        title: Text(widget.creatingAccount ? 'Create a Hela account' : widget.title),
+        leading: widget.onBack == null ? null : IconButton(
+          key: const Key('otp-back'),
+          tooltip: 'Back to sign-in options',
+          icon: const Icon(Icons.arrow_back),
+          onPressed: widget.onBack,
+        ),
+      ),
       body: SafeArea(
-        child: ListView(padding: const EdgeInsets.all(24), children: [
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           const AppNotices(),
+          if (_challenge == null)
+            InfoBanner(widget.creatingAccount
+                ? 'Create or access your Hela account by verifying a mobile number with a six-digit SMS code.'
+                : 'Sign in without a password. Verifying a new number automatically creates a customer account.'),
+          if (widget.creatingAccount && _challenge == null)
+            CheckboxListTile(
+              key: const Key('registration-ack'),
+              value: _acknowledged,
+              onChanged: (checked) => setState(() => _acknowledged = checked ?? false),
+              title: const Text('I understand this mobile number will be used to create or access my account.'),
+              subtitle: const Text('You must also review required privacy and service notices before using Hela.'),
+            ),
+          const SizedBox(height: 12),
           TextField(
             key: const Key('phone'),
             controller: _phone,
@@ -298,16 +334,7 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
             enabled: _challenge == null,
           ),
           const SizedBox(height: 12),
-          if (_challenge == null)
-            FilledButton(
-              key: const Key('send-code'),
-              onPressed: _busy ? null : () => _do(() async {
-                final id = await widget.api.requestOtp(_phone.text.trim());
-                setState(() => _challenge = id);
-              }),
-              child: Text(s.t('auth.send_code')),
-            )
-          else ...[
+          if (_challenge != null) ...[
             Text(s.t('auth.code_sent')),
             TextField(
               key: const Key('code'),
@@ -318,49 +345,94 @@ class _PhoneSignInScreenState extends State<PhoneSignInScreen> {
               autofillHints: const [AutofillHints.oneTimeCode],
               decoration: InputDecoration(labelText: s.t('auth.code')),
             ),
-            FilledButton(
-              key: const Key('verify'),
-              onPressed: _busy ? null : () => _do(() async {
-                await widget.api.verifyOtp(_phone.text.trim(), _challenge!, _code.text);
-                widget.onSignedIn();
+            TextButton(
+              key: const Key('change-phone'),
+              onPressed: _busy ? null : () => setState(() {
+                _challenge = null;
+                _code.clear();
+                _error = null;
               }),
-              child: Text(s.t('auth.verify')),
+              child: const Text('Change number or request a new code'),
             ),
             if (const String.fromEnvironment('HELA_DEV_INBOX_TOKEN').isNotEmpty)
               TextButton(
                 key: const Key('dev-fill'),
                 onPressed: () async {
                   final code = await widget.api.devLatestCode(_phone.text.trim());
-                  if (code != null) setState(() => _code.text = code);
+                  if (mounted && code != null) setState(() => _code.text = code);
                 },
                 child: Text(s.t('auth.dev_fill')),
               ),
           ],
+          const SizedBox(height: 12),
+          const Text('Can’t receive SMS? Check your number and mobile coverage. '
+              'There is no password to reset. A lost phone number needs an approved account-recovery process.'),
           ErrorBanner(_error),
-        ]),
+            ]),
+          ),
+        ),
+      ),
+      // A primary action stays reachable even when the phone keyboard is open or
+      // large text pushes the form below the fold. The form itself remains scrollable.
+      bottomNavigationBar: SafeArea(
+        minimum: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+        child: _challenge == null
+            ? FilledButton(
+                key: const Key('send-code'),
+                onPressed: _busy || (widget.creatingAccount && !_acknowledged) ? null : () => _do(() async {
+                  final id = await widget.api.requestOtp(_phone.text.trim());
+                  if (mounted) setState(() => _challenge = id);
+                }),
+                child: Text(s.t('auth.send_code')),
+              )
+            : FilledButton(
+                key: const Key('verify'),
+                onPressed: _busy ? null : () => _do(() async {
+                  await widget.api.verifyOtp(_phone.text.trim(), _challenge!, _code.text);
+                  widget.onSignedIn();
+                }),
+                child: Text(widget.creatingAccount ? 'Verify and continue' : s.t('auth.verify')),
+              ),
       ),
     );
   }
 }
 
-/// Notice acceptance (FR-ID-05): records version, language and processing context server-side.
-Future<void> ensureNoticesAccepted(BuildContext context, HelaApi api, String language, String processingContext) async {
-  final notices = (await api.get('/v1/notices/current?language=$language') as List).cast<Map<String, dynamic>>();
-  for (final n in notices) {
-    if (!context.mounted) return;
-    final ok = await showDialog<bool>(
+/// Required notices (FR-ID-05). Users may decline; no home/booking access is granted
+/// until each currently required notice has been explicitly accepted server-side.
+Future<bool> ensureNoticesAccepted(BuildContext context, HelaApi api,
+    String language, String processingContext) async {
+  final notices = (await api.get('/v1/notices/current?language=$language') as List)
+      .cast<Map<String, dynamic>>();
+  for (final notice in notices) {
+    if (!context.mounted) return false;
+    final accepted = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: Text(n['title'] as String),
-        content: SingleChildScrollView(child: Text('${n['body']}\n\n(version ${n['version']}, ${n['approval_status']})')),
+      builder: (dialogContext) => AlertDialog(
+        title: Text(notice['title'] as String),
+        content: SingleChildScrollView(
+          child: Text('${notice['body']}\n\n(version ${notice['version']}, ${notice['approval_status']})'),
+        ),
         actions: [
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(Strings.of(context).t('notice.accept'))),
+          TextButton(
+            key: const Key('decline-notice'),
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Decline'),
+          ),
+          FilledButton(
+            key: const Key('accept-notice'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(Strings.of(context).t('notice.accept')),
+          ),
         ],
       ),
     );
-    if (ok == true) await api.post('/v1/notices/${n['id']}/accept', {'processing_context': processingContext});
+    if (accepted != true) return false;
+    await api.post('/v1/notices/${notice['id']}/accept',
+        {'processing_context': processingContext});
   }
+  return true;
 }
 
 /// Incident report (FR-SAF-01, C12/P10). Reachable without payment or review; never an emergency service.

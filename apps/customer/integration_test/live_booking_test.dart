@@ -89,7 +89,10 @@ void main() {
       }
     }
     expect(tester.widget<TextField>(codeField).controller!.text, hasLength(6), reason: 'no code in the sandbox inbox');
-    await tapAndWait(tester, find.byKey(const Key('verify')), find.byKey(const Key('cat-household_cleaning')));
+    await settle(tester);
+    await tester.tap(find.byKey(const Key('verify')));
+    await tester.pump(const Duration(milliseconds: 300));
+    // The home screen is intentionally blocked until all required notices are accepted.
     await acceptNotices(tester, api);
     await pumpUntil(tester, find.byKey(const Key('cat-household_cleaning')).hitTestable());
 

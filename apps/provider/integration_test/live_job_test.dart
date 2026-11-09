@@ -107,8 +107,12 @@ void main() {
         }
       }
       expect(tester.widget<TextField>(codeField).controller!.text, hasLength(6), reason: 'no code in the sandbox inbox');
-      await tapAndWait(tester, find.byKey(const Key('verify')), find.text('Job offers'));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('verify')));
+      await tester.pump(const Duration(milliseconds: 300));
+      // Provider job access begins only after required notices are accepted.
       await acceptNotices(tester, api);
+      await pumpUntil(tester, find.text('Job offers'));
 
       // P05: the worker's offer appears with a countdown and without the address (FR-LOC-03).
       final ours = (await customer.get('/v1/requests') as List).cast<Map<String, dynamic>>()

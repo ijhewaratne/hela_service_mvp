@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import axe from 'axe-core';
 import { ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -69,6 +69,19 @@ describe('console pages pass automated accessibility checks', () => {
     ['privacy', () => <Privacy />],
   ])('%s', async (_name, page) => {
     expect(await violations(page())).toEqual([]);
+  });
+
+  it('offers supervised recovery information without public admin account creation', async () => {
+    render(
+      <AuthProvider>
+        <MemoryRouter><Login /></MemoryRouter>
+      </AuthProvider>,
+    );
+    expect(screen.queryByRole('region', { name: 'Administrator account recovery' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Forgot password or lost authenticator?' }));
+    expect(screen.getByRole('region', { name: 'Administrator account recovery' }))
+      .toHaveTextContent('supervised password or authenticator reset');
+    expect(screen.queryByText('Create administrator account')).not.toBeInTheDocument();
   });
 
   it('sign in (has its own main landmark)', async () => {
