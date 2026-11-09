@@ -11,7 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header
 from pydantic import Field
 from sqlalchemy import Connection
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError
 
 from ..audit import service as audit
 from ..authz.deps import UserPrincipal, current_user
@@ -90,7 +90,10 @@ def accept_offer(con: Connection, svc: Services, offer_id: str, provider_id: str
         raise ApiError(404, 'NOT_FOUND', 'error.not_found')
     req = one(con, 'SELECT * FROM service_requests WHERE id = :id FOR UPDATE', id=head['request_id'])
     offer = one(con, 'SELECT * FROM offers WHERE id = :id FOR UPDATE', id=offer_id)
-    one(con, 'SELECT user_id FROM provider_profiles WHERE user_id = :p FOR SHARE', p=provider_id)
+    # An exclusive lock, not FOR SHARE: two accepts by one provider for overlapping slots would otherwise both
+    # reach the assignment insert and deadlock on each other's exclusion-constraint check (HTTP 500). Taking
+    # turns here lets the second see the first's assignment and get a clean 409.
+    one(con, 'SELECT user_id FROM provider_profiles WHERE user_id = :p FOR NO KEY UPDATE', p=provider_id)
     if offer['status'] == 'accepted':   # AT-020: a retry after a lost response returns the same booking
         prev = one(con, '''SELECT b.id FROM booking_assignments a JOIN bookings b ON b.id = a.booking_id
                            WHERE a.offer_id = :o''', o=offer_id)
@@ -161,10 +164,12 @@ class CommitThenRaise(Exception):
         self.error = error
 
 
-def _conflict_from_integrity(exc: IntegrityError) -> ApiError:
+def _conflict_from_db(exc: DBAPIError) -> ApiError:
     code = getattr(exc.orig, 'sqlstate', None)
     if code in ('23P01', '23505'):   # exclusion / unique violation: someone else won, or provider is now busy
         return ApiError(409, 'ASSIGNMENT_CONFLICT', 'booking.assignment_conflict', retryable=False)
+    if code in ('40P01', '40001'):   # deadlock / serialization failure: rolled back whole, safe to retry
+        return ApiError(409, 'ASSIGNMENT_CONFLICT', 'booking.assignment_conflict', retryable=True)
     raise exc
 
 
@@ -188,8 +193,8 @@ def accept(offer_id: UUID, idempotency_key: str | None = Header(None, alias='Ide
                 idempotency.remember(con, actor_type='user', actor_id=user.user_id, scope=scope, key=key,
                                      request_hash=h, response=result)
                 return result
-    except IntegrityError as exc:
-        raise _conflict_from_integrity(exc) from None
+    except DBAPIError as exc:
+        raise _conflict_from_db(exc) from None
     raise deferred
 
 

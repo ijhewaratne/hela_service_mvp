@@ -712,3 +712,58 @@ def test_cors_allows_only_configured_admin_origin(client, reset):
     assert 'access-control-allow-credentials' not in ok.headers
     bad = client.options('/v1/regions', headers={'Origin': 'https://evil.example', 'Access-Control-Request-Method': 'GET'})
     assert 'access-control-allow-origin' not in bad.headers
+
+
+def test_accepts_by_one_provider_take_turns(world, app):
+    """Regression: with only a shared lock on the provider, overlapping accepts by one provider reached the
+    exclusion-constraint insert together and deadlocked (HTTP 500). An accept must now wait for any other
+    transaction holding the provider's row, so a concurrent accept is serialized instead."""
+    import time
+
+    from sqlalchemy import text
+    c_tok, addr = world.customer()
+    p_tok, pid = world.provider('+94771000001')
+    world.request(c_tok, addr)
+    drain(app)
+    offer_id = _offer_for(world, p_tok)['id']
+    engine = app.state.services.engine
+    with engine.connect() as holder:
+        holder.execute(text('SELECT 1 FROM provider_profiles WHERE user_id = :p FOR SHARE'), {'p': pid})
+
+        def go():
+            with TestClient(app) as c:
+                return c.post(f'/v1/offers/{offer_id}/accept',
+                              headers={**bearer(p_tok), 'Idempotency-Key': f'k-{uuid.uuid4().hex}'}).status_code
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(go)
+            waiting = False
+            with engine.connect() as probe:
+                for _ in range(100):
+                    waiting = probe.execute(text(
+                        """SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'
+                           AND query LIKE '%FROM provider_profiles%'""")).scalar() > 0
+                    probe.rollback()                  # pg_stat_activity is a per-transaction snapshot
+                    if waiting or pending.done():
+                        break
+                    time.sleep(0.1)
+            holder.rollback()
+            assert waiting, 'accept did not wait for the provider row lock'
+            assert pending.result(timeout=30) == 200
+
+
+def test_accept_maps_database_conflicts_to_409_not_500():
+    """A deadlock or serialization failure rolls the whole accept back, so it is a retryable conflict, never a 500."""
+    from hela.booking.bookings import _conflict_from_db
+
+    class Orig(Exception):
+        def __init__(self, sqlstate):
+            self.sqlstate = sqlstate
+
+    def err(code):
+        return DBAPIError('INSERT ...', {}, Orig(code))
+
+    for code, retryable in (('23P01', False), ('23505', False), ('40P01', True), ('40001', True)):
+        e = _conflict_from_db(err(code))
+        assert (e.status, e.code, e.retryable) == (409, 'ASSIGNMENT_CONFLICT', retryable), code
+    with pytest.raises(DBAPIError):
+        _conflict_from_db(err('42P01'))   # anything else is a real bug and stays a 500
