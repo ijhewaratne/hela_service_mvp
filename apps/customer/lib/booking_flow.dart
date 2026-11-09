@@ -241,7 +241,9 @@ class _BookingFlowState extends State<BookingFlow> {
       appBar: AppBar(title: Text(c['display_name'] as String)),
       body: SafeArea(
         child: ListView(
-          key: const Key('guided-booking-scroll'),
+          // A different key for every stage resets scroll and avoids reusing AsyncSection state
+          // (an address-list fetch must not be confused with a beneficiary-list fetch).
+          key: ValueKey('guided-booking-step-$_step'),
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
           children: [
             Text('Step ${_step + 1} of ${steps.length}', style: Theme.of(context).textTheme.labelLarge),
