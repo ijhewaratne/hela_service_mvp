@@ -128,6 +128,10 @@ void main() {
     await tester.tap(send);
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('code')), '123456');
+    // Registration disclosure adds content above the submit action on smaller screens.
+    await tester.scrollUntilVisible(find.byKey(const Key('verify')), 160,
+        scrollable: find.byType(Scrollable).first);
+    await tester.ensureVisible(find.byKey(const Key('verify')));
     await tester.tap(find.byKey(const Key('verify')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('setup-display-name')), findsOneWidget);
