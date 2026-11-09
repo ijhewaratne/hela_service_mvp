@@ -50,6 +50,24 @@ class _BookingFlowState extends State<BookingFlow> {
     });
   }
 
+  // Returning to an earlier step invalidates the quote; it must be re-priced before any submission.
+  // An uncertain response on the review step does NOT invalidate the idempotency key.
+  void _editPreviousStep() {
+    if (_step < 1) return;
+    setState(() {
+      _step -= 1;
+      _quote = null;
+      _termsAccepted = false;
+      _idempotencyKey = null;
+    });
+  }
+
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
+
   Future<void> _confirm() async {
     final q = _quote!;
     await widget.api.post('/v1/quotes/${q['quote_id']}/accept', {'policy_version': q['policy_version']});
@@ -69,13 +87,7 @@ class _BookingFlowState extends State<BookingFlow> {
   Widget build(BuildContext context) {
     final stepMin = c['min_duration_minutes'] as int;
     final stepMax = c['max_duration_minutes'] as int;
-    return Scaffold(
-      appBar: AppBar(title: Text(c['display_name'] as String)),
-      body: Stepper(
-        currentStep: _step,
-        onStepTapped: (i) => i < _step ? setState(() => _step = i) : null,
-        controlsBuilder: (_, _) => const SizedBox.shrink(),
-        steps: [
+    final steps = <Step>[
           Step(
             title: const Text('Address'),
             content: AsyncSection<List<dynamic>>(
@@ -224,7 +236,42 @@ class _BookingFlowState extends State<BookingFlow> {
                     ActionButton(label: 'Request this service', enabled: _termsAccepted, onPressed: _confirm),
                   ]),
           ),
-        ],
+    ];
+    return Scaffold(
+      appBar: AppBar(title: Text(c['display_name'] as String)),
+      body: SafeArea(
+        child: ListView(
+          key: const Key('guided-booking-scroll'),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+          children: [
+            Text('Step ${_step + 1} of ${steps.length}', style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(
+              key: const Key('booking-progress'),
+              value: (_step + 1) / steps.length,
+              minHeight: 6,
+              semanticsLabel: 'Booking step ${_step + 1} of ${steps.length}',
+            ),
+            const SizedBox(height: 20),
+            Semantics(header: true, child: DefaultTextStyle(
+              style: Theme.of(context).textTheme.headlineSmall!,
+              child: steps[_step].title,
+            )),
+            const SizedBox(height: 14),
+            if (_step == 1 && _beneficiaryId != null)
+              const InfoBanner('The person receiving the service must approve by SMS before a provider is contacted.'),
+            steps[_step].content,
+            if (_step > 0) ...[
+              const SizedBox(height: 20),
+              OutlinedButton.icon(
+                key: const Key('booking-back'),
+                onPressed: _editPreviousStep,
+                icon: const Icon(Icons.arrow_back),
+                label: const Text('Back to previous step'),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
