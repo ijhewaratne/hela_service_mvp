@@ -82,7 +82,122 @@ Future<void> signIn(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 300));
 }
 
+class StubLanguagePref extends LanguagePref {
+  @override
+  Future<String?> read() async => 'en';
+  @override
+  Future<void> write(String lang) async {}
+}
+
 void main() {
+  testWidgets('profile lookup outage does not show provider application', (tester) async {
+    var down = true;
+    final backend = FakeBackend();
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient((req) async {
+      if (req.method == 'GET' && req.url.path == '/v1/provider/me' && down) {
+        return backend._err('TEMPORARY_UNAVAILABLE', 503);
+      }
+      return backend.handle(req);
+    }));
+    await tester.pumpWidget(ProviderApp(api: api, showMaps: false, offerPoll: const Duration(hours: 1)));
+    await tester.pumpAndSettle();
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('retry-provider-profile')), findsOneWidget);
+    expect(find.text('Work with Hela'), findsNothing);
+
+    down = false;
+    await tester.tap(find.byKey(const Key('retry-provider-profile')));
+    await tester.pumpAndSettle();
+    expect(find.text('Job offers'), findsOneWidget);
+  });
+
+  testWidgets('an unexpected profile response shows retry, not an endless spinner or the application form',
+      (tester) async {
+    var broken = true;
+    final backend = FakeBackend();
+    final api = HelaApi(store: MemoryTokenStore(), baseUrl: 'http://api', client: MockClient((req) async {
+      if (req.method == 'GET' && req.url.path == '/v1/provider/me' && broken) {
+        return backend._j(['not', 'a', 'profile']);   // 200, but not the shape the app expects
+      }
+      return backend.handle(req);
+    }));
+    await tester.pumpWidget(ProviderApp(api: api, showMaps: false, offerPoll: const Duration(hours: 1)));
+    await tester.pumpAndSettle();
+    await signIn(tester);
+    await tester.pumpAndSettle();
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byKey(const Key('retry-provider-profile')), findsOneWidget);
+    expect(find.text('Work with Hela'), findsNothing);
+    expect(find.textContaining('Something went wrong'), findsOneWidget);
+    expect(find.textContaining('not, a, profile'), findsNothing);   // raw response content is never shown
+
+    broken = false;
+    await tester.tap(find.byKey(const Key('retry-provider-profile')));
+    await tester.pumpAndSettle();
+    expect(find.text('Job offers'), findsOneWidget);
+  });
+
+  testWidgets('"sign in with a different number" during an outage ends the old session once back online',
+      (tester) async {
+    var online = false;
+    final revoked = <String>[];
+    final backend = FakeBackend();
+    final store = MemoryTokenStore()..token = 'R-old-provider-session-1';
+    final api = HelaApi(store: store, baseUrl: 'http://api', client: MockClient((req) async {
+      if (req.url.path == '/v1/auth/refresh') return http.Response('', 503);
+      if (!online) throw http.ClientException('no route');
+      if (req.url.path == '/v1/auth/revoke') {
+        revoked.add((jsonDecode(req.body) as Map)['refresh_token'] as String);
+        return http.Response('', 204);
+      }
+      return backend.handle(req);
+    }));
+    await tester.pumpWidget(ProviderApp(
+      api: api, languagePref: StubLanguagePref(), showMaps: false, offerPoll: const Duration(hours: 1)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('choose-other-account')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('phone')), findsOneWidget);
+    expect(store.token, isNull);
+    expect(store.pendingRevocations, ['R-old-provider-session-1']);
+
+    online = true;
+    await tester.enterText(find.byKey(const Key('phone')), '+94771000002');
+    await tester.tap(find.byKey(const Key('send-code')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('code')), '123456');
+    await tester.tap(find.byKey(const Key('verify')));
+    await tester.pumpAndSettle();
+    expect(revoked, ['R-old-provider-session-1']);
+    expect(store.pendingRevocations, isEmpty);
+  });
+
+  testWidgets('saved provider session survives a startup outage and recovers on retry', (tester) async {
+    var online = false;
+    final backend = FakeBackend();
+    final store = MemoryTokenStore()..token = 'R1';
+    final api = HelaApi(store: store, baseUrl: 'http://api', client: MockClient((req) async {
+      if (req.url.path == '/v1/auth/refresh') {
+        if (!online) return http.Response('', 503);
+        return http.Response(jsonEncode({'access_token': 'A2', 'refresh_token': 'R2'}), 200);
+      }
+      return backend.handle(req);
+    }));
+    await tester.pumpWidget(ProviderApp(
+      api: api, languagePref: StubLanguagePref(), showMaps: false, offerPoll: const Duration(hours: 1)));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('retry-session')), findsOneWidget);
+    expect(find.byKey(const Key('phone')), findsNothing);
+    expect(store.token, 'R1');
+
+    online = true;
+    await tester.tap(find.byKey(const Key('retry-session')));
+    await tester.pumpAndSettle();
+    expect(find.text('Job offers'), findsOneWidget);
+    expect(store.token, 'R2');
+  });
+
   setUp(() {});
 
   testWidgets('new provider sees onboarding and can apply', (tester) async {
@@ -121,10 +236,11 @@ void main() {
     expect(find.textContaining('Synthetic Lane'), findsNothing);
     expect(find.byKey(const Key('countdown')), findsOneWidget);
 
-    // First tap: the response is lost. The app says nothing changed and does not pretend it got the job.
+    // First tap: the response is lost. The app must not pretend it got the job;
+    // the server may already have accepted it, so the outcome is uncertain.
     await tester.tap(find.widgetWithText(FilledButton, 'Accept'));
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.textContaining('No connection'), findsOneWidget);
+    expect(find.textContaining('may have reached the server'), findsOneWidget);
     // Retry uses the same idempotency key, so the server returns the same booking instead of a second one.
     await tester.tap(find.widgetWithText(FilledButton, 'Accept'));
     await tester.pump();

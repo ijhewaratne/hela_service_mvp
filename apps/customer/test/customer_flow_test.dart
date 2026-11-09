@@ -70,7 +70,38 @@ class FakeBackend {
   }
 }
 
+class StubLanguagePref extends LanguagePref {
+  @override
+  Future<String?> read() async => 'en';
+  @override
+  Future<void> write(String lang) async {}
+}
+
 void main() {
+  testWidgets('saved customer session survives a startup outage and recovers on retry', (tester) async {
+    var online = false;
+    final backend = FakeBackend();
+    final store = MemoryTokenStore()..token = 'R1';
+    final api = HelaApi(store: store, baseUrl: 'http://api', client: MockClient((req) async {
+      if (req.url.path == '/v1/auth/refresh') {
+        if (!online) return http.Response('', 503);
+        return http.Response(jsonEncode({'access_token': 'A2', 'refresh_token': 'R2'}), 200);
+      }
+      return backend.handle(req);
+    }));
+    await tester.pumpWidget(CustomerApp(api: api, languagePref: StubLanguagePref(), showMaps: false));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('retry-session')), findsOneWidget);
+    expect(find.byKey(const Key('phone')), findsNothing);
+    expect(store.token, 'R1');
+
+    online = true;
+    await tester.tap(find.byKey(const Key('retry-session')));
+    await tester.pumpAndSettle();
+    expect(find.text('Book a service'), findsOneWidget);
+    expect(store.token, 'R2');
+  });
+
   testWidgets('language -> sign in -> book cleaning -> honest searching state -> booking with PIN', (tester) async {
     tester.view.physicalSize = const Size(1080, 2400);
     tester.view.devicePixelRatio = 2.5;
